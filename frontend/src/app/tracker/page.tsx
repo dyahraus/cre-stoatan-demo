@@ -136,7 +136,10 @@ export default function TrackerPage() {
         selectedSubmarket={selectedSubmarket}
         onZoomIn={() => setZoomed(true)}
         onHoverSubmarket={setHoveredSubmarket}
-        onSelectSubmarket={setSelectedSubmarket}
+        onSelectSubmarket={(id) => {
+          setSelectedSubmarket(id);
+          if (id && window.innerWidth < 768) setSheetSnap("expanded");
+        }}
         markers2D={markers2D}
         onMarkers2DChange={handleMarkers2DChange}
       />
