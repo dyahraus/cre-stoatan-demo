@@ -10,7 +10,9 @@ import type {
   Stats,
 } from "./types";
 
-const BASE = "/api";
+const BASE = process.env.NEXT_PUBLIC_API_URL
+  ? `${process.env.NEXT_PUBLIC_API_URL}/api`
+  : "/api";
 
 async function fetchJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`);
