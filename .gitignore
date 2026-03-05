@@ -1,0 +1,42 @@
+# Virtual environments
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Node
+node_modules/
+
+# Build artifacts
+.next/
+out/
+dist/
+build/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Claude Code
+.claude/
+
+# Database
+*.db
+
+# Python
+.pytest_cache/
+.ruff_cache/
+
+# Vercel
+.vercel
