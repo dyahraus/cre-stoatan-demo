@@ -254,6 +254,31 @@ async function readError(res: Response): Promise<string> {
   return `API error ${res.status}`;
 }
 
+export interface ImportResult {
+  framework_id: string;
+  imported: number;
+  skipped: number;
+  errors: { line: number; reason: string }[];
+}
+
+export async function importKeywordsCSV(
+  frameworkId: string,
+  file: File
+): Promise<ImportResult> {
+  const form = new FormData();
+  form.set("file", file);
+  const res = await fetch(
+    `${BASE}/frameworks/${frameworkId}/keywords/import`,
+    { method: "POST", body: form }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
+export function frameworkTemplateUrl(): string {
+  return `${BASE}/frameworks/template.csv`;
+}
+
 export async function patchKeyword(
   frameworkId: string,
   keywordId: string,

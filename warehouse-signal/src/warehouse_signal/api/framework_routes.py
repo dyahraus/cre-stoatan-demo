@@ -1,4 +1,4 @@
-"""Signal Framework CRUD + dry-run endpoints.
+"""Signal Framework CRUD + dry-run + bulk-import endpoints.
 
 A "framework" is a named bundle of (phrase, weight, category) rules that
 the keyword engine applies to every chunk. Users edit it via /framework
@@ -7,10 +7,14 @@ in the UI; this router exposes the persistence layer.
 
 from __future__ import annotations
 
+import csv
+import io
+import re
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from warehouse_signal.analysis.keyword_engine import (
@@ -30,6 +34,26 @@ from warehouse_signal.models.schemas import (
 from warehouse_signal.scoring.aggregator import compute_chunk_score
 
 router = APIRouter(prefix="/frameworks", tags=["frameworks"])
+
+
+# ---------------------------------------------------------------------------
+# Static routes — declared first so they don't collide with /{framework_id}
+# ---------------------------------------------------------------------------
+
+_TEMPLATE_CSV = (
+    "phrase,category,weight,is_regex,companion_pattern,notes\n"
+    "distribution center,industrial_transformation,7.0,false,,\n"
+    '"broke ground",commitment_level,9.0,false,'
+    '"\\$\\s?\\d|\\d[\\d,\\.]*\\s*(million|billion|sq\\.?\\s?ft)",'
+    '"requires nearby $ amount or sqft"\n'
+    "automation,industrial_transformation,5.0,false,,R&D-tagged\n"
+)
+
+
+@router.get("/template.csv", response_class=PlainTextResponse)
+def keyword_template_csv() -> str:
+    """Downloadable CSV template for bulk imports."""
+    return _TEMPLATE_CSV
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +258,202 @@ def delete_keyword(framework_id: str, keyword_id: str) -> None:
     if not storage.get_framework(framework_id):
         raise HTTPException(404, f"Framework {framework_id} not found")
     storage.delete_keyword(keyword_id)
+
+
+# ---------------------------------------------------------------------------
+# Bulk import (CSV / JSON)
+# ---------------------------------------------------------------------------
+
+_REQUIRED_COLUMNS = {"phrase", "category"}
+_OPTIONAL_COLUMNS = {"weight", "is_regex", "companion_pattern", "notes"}
+
+
+class ImportRow(BaseModel):
+    phrase: str
+    category: str
+    weight: float = 5.0
+    is_regex: bool = False
+    companion_pattern: str | None = None
+    notes: str = ""
+
+
+class ImportRequest(BaseModel):
+    rows: list[ImportRow]
+
+
+class ImportResult(BaseModel):
+    framework_id: str
+    imported: int
+    skipped: int
+    errors: list[dict]
+
+
+def _parse_bool(s: str) -> bool:
+    return str(s).strip().lower() in {"true", "1", "yes", "y", "t"}
+
+
+def _existing_keyword_keys(fw: SignalFramework) -> set[tuple[str, str, bool]]:
+    """Dedupe key: (phrase lowercase, category, is_regex)."""
+    return {
+        (k.phrase.strip().lower(), k.category.value, k.is_regex)
+        for k in fw.keywords
+    }
+
+
+def _process_import_rows(
+    framework_id: str, fw: SignalFramework, rows: list[tuple[int, dict]]
+) -> ImportResult:
+    storage = get_storage()
+    existing = _existing_keyword_keys(fw)
+    imported = 0
+    skipped = 0
+    errors: list[dict] = []
+    seen_in_batch: set[tuple[str, str, bool]] = set()
+
+    for line_num, raw in rows:
+        try:
+            phrase = (raw.get("phrase") or "").strip()
+            category_str = (raw.get("category") or "").strip()
+            if not phrase or not category_str:
+                errors.append(
+                    {"line": line_num, "reason": "phrase and category required"}
+                )
+                skipped += 1
+                continue
+            try:
+                category = KeywordCategory(category_str)
+            except ValueError:
+                errors.append(
+                    {
+                        "line": line_num,
+                        "reason": f"unknown category {category_str!r}",
+                    }
+                )
+                skipped += 1
+                continue
+
+            weight_raw = raw.get("weight", 5.0)
+            try:
+                weight = float(weight_raw) if weight_raw not in ("", None) else 5.0
+            except (TypeError, ValueError):
+                errors.append(
+                    {"line": line_num, "reason": f"invalid weight {weight_raw!r}"}
+                )
+                skipped += 1
+                continue
+            weight = max(1.0, min(10.0, weight))
+
+            is_regex_raw = raw.get("is_regex", False)
+            is_regex = (
+                bool(is_regex_raw)
+                if isinstance(is_regex_raw, bool)
+                else _parse_bool(is_regex_raw)
+            )
+
+            if is_regex:
+                try:
+                    re.compile(phrase)
+                except re.error as e:
+                    errors.append(
+                        {"line": line_num, "reason": f"bad regex: {e}"}
+                    )
+                    skipped += 1
+                    continue
+
+            companion = (raw.get("companion_pattern") or "").strip() or None
+            if companion:
+                try:
+                    re.compile(companion)
+                except re.error as e:
+                    errors.append(
+                        {
+                            "line": line_num,
+                            "reason": f"bad companion regex: {e}",
+                        }
+                    )
+                    skipped += 1
+                    continue
+
+            key = (phrase.lower(), category.value, is_regex)
+            if key in existing or key in seen_in_batch:
+                skipped += 1
+                continue
+            seen_in_batch.add(key)
+
+            kw = SignalKeyword(
+                id=str(uuid.uuid4()),
+                framework_id=framework_id,
+                category=category,
+                phrase=phrase,
+                is_regex=is_regex,
+                weight=weight,
+                companion_pattern=companion,
+                notes=(raw.get("notes") or "").strip(),
+                created_at=datetime.now(timezone.utc),
+            )
+            storage.add_keyword(kw)
+            imported += 1
+        except Exception as e:  # noqa: BLE001
+            errors.append({"line": line_num, "reason": str(e)})
+            skipped += 1
+
+    return ImportResult(
+        framework_id=framework_id,
+        imported=imported,
+        skipped=skipped,
+        errors=errors,
+    )
+
+
+@router.post("/{framework_id}/keywords/import")
+async def import_keywords_csv(
+    framework_id: str,
+    file: UploadFile = File(...),
+) -> ImportResult:
+    """Import keywords from a CSV file (multipart upload).
+
+    CSV columns: phrase (required), category (required), weight,
+    is_regex, companion_pattern, notes. Header row required.
+
+    Idempotent: rows that match an existing (phrase, category,
+    is_regex) in the framework are skipped, not duplicated.
+    """
+    storage = get_storage()
+    fw = storage.get_framework(framework_id)
+    if not fw:
+        raise HTTPException(404, f"Framework {framework_id} not found")
+    try:
+        data = (await file.read()).decode("utf-8", errors="replace")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"Could not read file: {e}")
+    try:
+        reader = csv.DictReader(io.StringIO(data))
+        if reader.fieldnames is None or not _REQUIRED_COLUMNS.issubset(
+            {(c or "").strip() for c in reader.fieldnames}
+        ):
+            raise HTTPException(
+                400,
+                f"CSV must include columns {sorted(_REQUIRED_COLUMNS)}",
+            )
+        rows = [(line_num, row) for line_num, row in enumerate(reader, start=2)]
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"Malformed CSV: {e}")
+    return _process_import_rows(framework_id, fw, rows)
+
+
+@router.post("/{framework_id}/keywords/import-json")
+def import_keywords_json(
+    framework_id: str, body: ImportRequest
+) -> ImportResult:
+    """Import keywords from a JSON body. Useful for programmatic clients."""
+    storage = get_storage()
+    fw = storage.get_framework(framework_id)
+    if not fw:
+        raise HTTPException(404, f"Framework {framework_id} not found")
+    rows = [(i, r.model_dump()) for i, r in enumerate(body.rows, start=1)]
+    return _process_import_rows(framework_id, fw, rows)
 
 
 # ---------------------------------------------------------------------------

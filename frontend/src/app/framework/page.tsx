@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addKeyword,
   createFramework,
@@ -9,9 +9,12 @@ import {
   dryRunFramework,
   duplicateFramework,
   fetchFrameworks,
+  frameworkTemplateUrl,
+  importKeywordsCSV,
   patchFramework,
   patchKeyword,
 } from "@/lib/api";
+import type { ImportResult } from "@/lib/api";
 import type {
   DryRunResult,
   KeywordCategory,
@@ -442,6 +445,8 @@ function FrameworkHeader({
   const [newName, setNewName] = useState("");
   const [copyKeywords, setCopyKeywords] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const isOnly = allFrameworks.length === 1;
 
   // Sync rename buffer when active framework changes
@@ -539,6 +544,20 @@ function FrameworkHeader({
     }
   }
 
+  async function onImportFile(file: File) {
+    setBusy(true);
+    setImportResult(null);
+    try {
+      const result = await importKeywordsCSV(framework.id, file);
+      setImportResult(result);
+      onMutated();
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3 space-y-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -607,6 +626,35 @@ function FrameworkHeader({
             Set as default
           </button>
         )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onImportFile(f);
+            e.target.value = "";
+          }}
+          className="hidden"
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={busy}
+          title="Import keywords from a CSV"
+          className="rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs px-2.5 py-1.5 disabled:opacity-50"
+        >
+          Import CSV
+        </button>
+        <a
+          href={frameworkTemplateUrl()}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-zinc-500 hover:text-zinc-300 px-2 py-1.5"
+          title="Download a template CSV"
+        >
+          template
+        </a>
+
         <button
           onClick={onDelete}
           disabled={busy || isOnly}
@@ -629,6 +677,41 @@ function FrameworkHeader({
           <span className="ml-2 italic">— {framework.description}</span>
         )}
       </div>
+
+      {importResult && (
+        <div
+          className={`rounded border px-3 py-2 text-xs ${
+            importResult.errors.length > 0
+              ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+              : "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+          }`}
+        >
+          <div className="flex justify-between items-baseline">
+            <span>
+              Imported <strong>{importResult.imported}</strong>, skipped{" "}
+              <strong>{importResult.skipped}</strong>
+              {importResult.errors.length > 0
+                ? ` (${importResult.errors.length} errors)`
+                : ""}
+            </span>
+            <button
+              onClick={() => setImportResult(null)}
+              className="text-zinc-500 hover:text-zinc-300"
+            >
+              dismiss
+            </button>
+          </div>
+          {importResult.errors.length > 0 && (
+            <ul className="mt-1 space-y-0.5 max-h-32 overflow-y-auto font-mono">
+              {importResult.errors.map((e, i) => (
+                <li key={i}>
+                  line {e.line}: {e.reason}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {creating && (
         <div className="rounded border border-blue-500/30 bg-blue-500/5 p-3 space-y-2">
