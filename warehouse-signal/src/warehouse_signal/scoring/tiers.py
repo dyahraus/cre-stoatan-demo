@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timezone
 
 from warehouse_signal.models.schemas import (
+    BoostConfig,
     KeywordCategory,
     SignalFramework,
     SignalKeyword,
@@ -193,6 +194,16 @@ def DEFAULT_FRAMEWORK_SEED() -> SignalFramework:
         ),
         is_default=True,
         keywords=keywords,
+        boosts=BoostConfig(
+            prepared_remarks=1.1,
+            qa=0.9,
+            full=1.0,
+            speaker_role={
+                "CEO": 1.2,
+                "CFO": 1.1,
+                "Analyst": 0.7,
+            },
+        ),
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )

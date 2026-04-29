@@ -29,6 +29,7 @@ from warehouse_signal.analysis.keyword_engine import (
     keyword_score,
 )
 from warehouse_signal.models.schemas import (
+    BoostConfig,
     ChunkContribution,
     CompanyScore,
     ExtractedMetrics,
@@ -88,6 +89,53 @@ def compute_chunk_score(
         + W_COMMITMENT * commit_part
     )
     return round(hybrid, 4), kw_part, commit_part
+
+
+# ---------------------------------------------------------------------------
+# Boost application
+# ---------------------------------------------------------------------------
+
+def _section_boost(boosts: BoostConfig, section_type: str) -> float:
+    if section_type == "prepared_remarks":
+        return boosts.prepared_remarks
+    if section_type == "qa":
+        return boosts.qa
+    return boosts.full
+
+
+def _speaker_boost(boosts: BoostConfig, speaker_role: str | None) -> float:
+    """Case-insensitive prefix match: "CEO" hits 'Chief Executive Officer'."""
+    if not speaker_role or not boosts.speaker_role:
+        return 1.0
+    sr = speaker_role.strip().lower()
+    for key, mult in boosts.speaker_role.items():
+        if not key:
+            continue
+        kl = key.strip().lower()
+        if not kl:
+            continue
+        if sr.startswith(kl) or kl in sr:
+            return mult
+    return 1.0
+
+
+def apply_boosts(
+    base_score: float,
+    section_type: str,
+    speaker_role: str | None,
+    boosts: BoostConfig,
+) -> tuple[float, float]:
+    """Apply section + speaker multipliers to a 0..1 score.
+
+    Returns (boosted_score_clamped, applied_multiplier). The applied
+    multiplier is exposed in ScoreComponents so the breakdown panel can
+    show "1.32× from CEO + prepared remarks → clamped to 1.0".
+    """
+    mult = _section_boost(boosts, section_type) * _speaker_boost(
+        boosts, speaker_role
+    )
+    boosted = base_score * mult
+    return min(max(boosted, 0.0), 1.0), round(mult, 4)
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +203,7 @@ def score_transcript(
     move_types: list[str] = []
 
     all_hits: list[KeywordHit] = []
+    boost_multipliers: list[float] = []
     for chunk in chunks:
         cid = chunk["chunk_id"]
         ext = extractions.get(cid)
@@ -164,8 +213,16 @@ def score_transcript(
         llm_relevance = ext["warehouse_relevance"] if ext else 0.0
         llm_expansion = ext["expansion_score"] if ext else 0.0
 
-        chunk_score_value, kw_part, commit_part = compute_chunk_score(
+        base_score, kw_part, commit_part = compute_chunk_score(
             llm_expansion, kw_hits
+        )
+
+        # Apply section + speaker boosts from the framework
+        chunk_score_value, applied_mult = apply_boosts(
+            base_score,
+            chunk["section_type"],
+            chunk.get("speaker_role"),
+            framework.boosts,
         )
 
         is_relevant = (
@@ -173,6 +230,7 @@ def score_transcript(
         )
         if not is_relevant:
             continue
+        boost_multipliers.append(applied_mult)
 
         relevant_chunks.append(
             {
@@ -291,6 +349,12 @@ def score_transcript(
         sum(c["_commit_part"] for c in relevant_chunks) / len(relevant_chunks), 4
     )
 
+    avg_boost = (
+        round(sum(boost_multipliers) / len(boost_multipliers), 4)
+        if boost_multipliers
+        else 1.0
+    )
+
     components = ScoreComponents(
         max_expansion=round(max_chunk, 4),
         weighted_avg=round(weighted_avg, 4),
@@ -298,6 +362,7 @@ def score_transcript(
         time_bonus=round(time_bonus, 4),
         keyword_component=keyword_component,
         commitment_component=commitment_component,
+        boost_multiplier=avg_boost,
     )
 
     contributions.sort(key=lambda c: c.contribution, reverse=True)

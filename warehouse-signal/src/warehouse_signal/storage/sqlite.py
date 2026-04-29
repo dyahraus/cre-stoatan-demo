@@ -15,6 +15,7 @@ import sqlite_utils
 
 from warehouse_signal.config import Config
 from warehouse_signal.models.schemas import (
+    BoostConfig,
     ChunkContribution,
     ChunkExtraction,
     Company,
@@ -622,6 +623,7 @@ class Storage:
                 "name": framework.name,
                 "description": framework.description,
                 "is_default": int(framework.is_default),
+                "boost_config_json": framework.boosts.model_dump_json(),
                 "created_at": framework.created_at.isoformat(),
                 "updated_at": now,
             },
@@ -693,12 +695,23 @@ class Storage:
             )
         )
         keywords = [self._row_to_keyword(k) for k in kw_rows]
+
+        boost_raw = row.get("boost_config_json")
+        if boost_raw:
+            try:
+                boosts = BoostConfig(**json.loads(boost_raw))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                boosts = BoostConfig()
+        else:
+            boosts = BoostConfig()
+
         return SignalFramework(
             id=row["id"],
             name=row["name"],
             description=row.get("description") or "",
             is_default=bool(row.get("is_default")),
             keywords=keywords,
+            boosts=boosts,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )

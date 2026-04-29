@@ -83,7 +83,7 @@ export function ContributionList({
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {COMPONENT_META.map((m) => {
-          const value = components[m.key] ?? 0;
+          const value = (components[m.key] ?? 0) as number;
           const contribution = value * m.weight;
           return (
             <ComponentBar
@@ -97,6 +97,20 @@ export function ContributionList({
           );
         })}
       </div>
+
+      {components.boost_multiplier !== undefined &&
+        Math.abs(components.boost_multiplier - 1) > 0.001 && (
+          <div className="rounded border border-blue-500/30 bg-blue-500/5 p-2.5 text-xs flex items-center justify-between">
+            <span className="text-zinc-400">
+              Section + speaker boosts (avg across relevant chunks)
+            </span>
+            <span className="font-mono text-blue-300">
+              {components.boost_multiplier.toFixed(2)}× ·{" "}
+              {components.boost_multiplier > 1 ? "+" : ""}
+              {((components.boost_multiplier - 1) * 100).toFixed(0)}%
+            </span>
+          </div>
+        )}
 
       <div className="border-t border-zinc-800 pt-3 space-y-2">
         <h4 className="text-xs uppercase tracking-wider text-zinc-500">

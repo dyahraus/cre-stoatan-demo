@@ -159,6 +159,25 @@ export default function HowItWorksPage() {
           dig into the supporting chunks before acting.
         </p>
       </Section>
+
+      <Section title="Boosts (section + speaker)">
+        <p className="text-sm text-zinc-300">
+          Each chunk score is multiplied by a section-type boost and a
+          speaker-role boost from the active framework, then clamped to 1.0.
+          The default seed lifts prepared remarks slightly (1.10×) and
+          dampens Q&amp;A (0.90×); CEO statements get 1.20×, CFO 1.10×,
+          analyst questions 0.70×.
+        </p>
+        <p className="text-xs text-zinc-500">
+          Edit these on{" "}
+          <Link href="/framework" className="text-blue-400 hover:text-blue-300">
+            /framework
+          </Link>{" "}
+          — set everything to 1.0× for a neutral baseline. The applied
+          multiplier is shown on every transcript&apos;s score breakdown when
+          it deviates from neutral, so it&apos;s never hidden.
+        </p>
+      </Section>
     </div>
   );
 }

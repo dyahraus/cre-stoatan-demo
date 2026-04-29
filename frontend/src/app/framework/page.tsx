@@ -16,6 +16,7 @@ import {
 } from "@/lib/api";
 import type { ImportResult } from "@/lib/api";
 import type {
+  BoostConfig,
   DryRunResult,
   KeywordCategory,
   SignalFramework,
@@ -224,6 +225,13 @@ export default function FrameworkPage() {
         ))}
       </div>
 
+      {/* Section + speaker boost editor */}
+      <BoostsPanel
+        framework={framework}
+        onSaved={reload}
+        onError={(m) => setErr(m)}
+      />
+
       {/* Dry-run panel */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4 space-y-3">
         <div className="flex justify-between items-baseline">
@@ -422,6 +430,232 @@ function Stat({ label, value }: { label: string; value: string }) {
         {label}
       </div>
       <div className="text-sm font-mono text-white mt-0.5">{value}</div>
+    </div>
+  );
+}
+
+function BoostsPanel({
+  framework,
+  onSaved,
+  onError,
+}: {
+  framework: SignalFramework;
+  onSaved: () => void;
+  onError: (msg: string) => void;
+}) {
+  const initial: BoostConfig = framework.boosts ?? {
+    prepared_remarks: 1.0,
+    qa: 1.0,
+    full: 1.0,
+    speaker_role: {},
+  };
+  const [draft, setDraft] = useState<BoostConfig>(initial);
+  const [busy, setBusy] = useState(false);
+  const [newRole, setNewRole] = useState("");
+
+  // Sync when active framework changes
+  useEffect(() => {
+    setDraft(
+      framework.boosts ?? {
+        prepared_remarks: 1.0,
+        qa: 1.0,
+        full: 1.0,
+        speaker_role: {},
+      }
+    );
+  }, [framework.id, framework.boosts]);
+
+  const dirty =
+    draft.prepared_remarks !== initial.prepared_remarks ||
+    draft.qa !== initial.qa ||
+    draft.full !== initial.full ||
+    JSON.stringify(draft.speaker_role) !==
+      JSON.stringify(initial.speaker_role);
+
+  async function save() {
+    setBusy(true);
+    try {
+      await patchFramework(framework.id, { boosts: draft });
+      onSaved();
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function reset() {
+    setDraft({
+      prepared_remarks: 1.0,
+      qa: 1.0,
+      full: 1.0,
+      speaker_role: {},
+    });
+  }
+
+  function addRole() {
+    const role = newRole.trim();
+    if (!role) return;
+    setDraft({
+      ...draft,
+      speaker_role: { ...draft.speaker_role, [role]: 1.0 },
+    });
+    setNewRole("");
+  }
+
+  function setRole(role: string, value: number) {
+    setDraft({
+      ...draft,
+      speaker_role: { ...draft.speaker_role, [role]: value },
+    });
+  }
+
+  function removeRole(role: string) {
+    const next = { ...draft.speaker_role };
+    delete next[role];
+    setDraft({ ...draft, speaker_role: next });
+  }
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4 space-y-4">
+      <div className="flex justify-between items-baseline">
+        <div>
+          <h3 className="text-sm font-semibold text-white">
+            Section + speaker boosts
+          </h3>
+          <p className="text-xs text-zinc-500 mt-1">
+            Multiply chunk scores by section type and speaker role. Boosts
+            in [0.5, 1.5]; the final chunk score is clamped to 1.0.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={reset}
+            disabled={busy}
+            className="text-xs text-zinc-500 hover:text-zinc-300 px-2 py-1"
+          >
+            Reset to neutral
+          </button>
+          <button
+            onClick={save}
+            disabled={busy || !dirty}
+            className="rounded bg-blue-600 hover:bg-blue-500 text-white text-xs px-3 py-1.5 disabled:opacity-50"
+          >
+            {busy ? "Saving..." : "Save boosts"}
+          </button>
+        </div>
+      </div>
+
+      {/* Section sliders */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {(
+          [
+            ["prepared_remarks", "Prepared remarks"],
+            ["qa", "Q&A"],
+            ["full", "Unsegmented"],
+          ] as const
+        ).map(([key, label]) => (
+          <BoostSlider
+            key={key}
+            label={label}
+            value={draft[key]}
+            onChange={(v) => setDraft({ ...draft, [key]: v })}
+          />
+        ))}
+      </div>
+
+      {/* Speaker-role multipliers */}
+      <div className="space-y-2">
+        <h4 className="text-xs uppercase tracking-wider text-zinc-500">
+          Speaker-role boosts (case-insensitive prefix or substring match)
+        </h4>
+        <div className="space-y-1.5">
+          {Object.entries(draft.speaker_role).length === 0 && (
+            <p className="text-xs text-zinc-600 italic">No role boosts yet.</p>
+          )}
+          {Object.entries(draft.speaker_role).map(([role, value]) => (
+            <div
+              key={role}
+              className="flex items-center gap-2 rounded bg-zinc-900 px-2 py-1.5"
+            >
+              <span className="font-mono text-sm text-zinc-200 w-20 shrink-0">
+                {role}
+              </span>
+              <input
+                type="range"
+                min={0.5}
+                max={1.5}
+                step={0.05}
+                value={value}
+                onChange={(e) => setRole(role, parseFloat(e.target.value))}
+                className="flex-1 accent-blue-500"
+              />
+              <span className="font-mono text-xs text-zinc-300 tabular-nums w-12 text-right">
+                {value.toFixed(2)}×
+              </span>
+              <button
+                onClick={() => removeRole(role)}
+                className="text-zinc-600 hover:text-red-400 text-xs"
+                aria-label="Remove role"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <input
+            value={newRole}
+            onChange={(e) => setNewRole(e.target.value)}
+            placeholder="Add a role (e.g. CEO, Analyst, IR)"
+            className="flex-1 rounded bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-xs text-white focus:border-blue-500 focus:outline-none"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") addRole();
+            }}
+          />
+          <button
+            onClick={addRole}
+            className="rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs px-3"
+          >
+            +
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BoostSlider({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="rounded bg-zinc-900 border border-zinc-800 p-2.5">
+      <div className="flex justify-between items-baseline">
+        <span className="text-xs font-medium text-zinc-200">{label}</span>
+        <span className="font-mono text-xs text-zinc-300 tabular-nums">
+          {value.toFixed(2)}×
+        </span>
+      </div>
+      <input
+        type="range"
+        min={0.5}
+        max={1.5}
+        step={0.05}
+        value={value}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        className="w-full accent-blue-500 mt-1"
+      />
+      <div className="flex justify-between text-[10px] text-zinc-600 mt-0.5">
+        <span>0.5</span>
+        <span>1.0 (neutral)</span>
+        <span>1.5</span>
+      </div>
     </div>
   );
 }

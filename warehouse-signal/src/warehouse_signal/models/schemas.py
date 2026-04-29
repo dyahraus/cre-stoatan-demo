@@ -226,6 +226,20 @@ class ScoreComponents(BaseModel):
     time_bonus: float = 0.0
     keyword_component: float = 0.0
     commitment_component: float = 0.0
+    boost_multiplier: float = 1.0
+
+
+class BoostConfig(BaseModel):
+    """Per-framework section + speaker-role boost multipliers.
+
+    Each multiplier is in [0.5, 1.5]. Lookups are case-insensitive
+    prefix matches on the speaker_role string ("Chief Executive Officer"
+    still hits "CEO"). Defaults to 1.0 everywhere == no bias.
+    """
+    prepared_remarks: float = Field(default=1.0, ge=0.5, le=1.5)
+    qa: float = Field(default=1.0, ge=0.5, le=1.5)
+    full: float = Field(default=1.0, ge=0.5, le=1.5)
+    speaker_role: dict[str, float] = Field(default_factory=dict)
 
 
 class ChunkContribution(BaseModel):
@@ -305,6 +319,7 @@ class SignalFramework(BaseModel):
     description: str = ""
     is_default: bool = False
     keywords: list[SignalKeyword] = Field(default_factory=list)
+    boosts: BoostConfig = Field(default_factory=BoostConfig)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

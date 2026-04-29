@@ -132,6 +132,7 @@ export interface SignalFramework {
   description: string;
   is_default: boolean;
   keywords: SignalKeyword[];
+  boosts?: BoostConfig;
   created_at: string;
   updated_at: string;
 }
@@ -165,6 +166,14 @@ export interface ScoreComponents {
   time_bonus: number;
   keyword_component: number;
   commitment_component: number;
+  boost_multiplier?: number;
+}
+
+export interface BoostConfig {
+  prepared_remarks: number;
+  qa: number;
+  full: number;
+  speaker_role: Record<string, number>;
 }
 
 export interface ChunkContribution {

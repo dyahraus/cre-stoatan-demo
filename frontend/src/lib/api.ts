@@ -1,4 +1,5 @@
 import type {
+  BoostConfig,
   CompanyHistoryEntry,
   CompanyScore,
   DemoChunkResult,
@@ -215,7 +216,12 @@ export async function createFramework(
 
 export async function patchFramework(
   id: string,
-  body: Partial<{ name: string; description: string; is_default: boolean }>
+  body: Partial<{
+    name: string;
+    description: string;
+    is_default: boolean;
+    boosts: BoostConfig;
+  }>
 ): Promise<SignalFramework> {
   const res = await fetch(`${BASE}/frameworks/${id}`, {
     method: "PATCH",

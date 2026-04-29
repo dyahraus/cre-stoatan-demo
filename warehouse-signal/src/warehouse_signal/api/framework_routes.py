@@ -25,6 +25,7 @@ from warehouse_signal.analysis.keyword_engine import (
 )
 from warehouse_signal.api.deps import get_storage
 from warehouse_signal.models.schemas import (
+    BoostConfig,
     KeywordCategory,
     SignalFramework,
     SignalKeyword,
@@ -70,6 +71,7 @@ class FrameworkUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     is_default: bool | None = None
+    boosts: BoostConfig | None = None
 
 
 class KeywordCreate(BaseModel):
@@ -145,6 +147,8 @@ def update_framework(framework_id: str, req: FrameworkUpdate) -> dict:
         fw.description = req.description
     if req.is_default is not None:
         fw.is_default = req.is_default
+    if req.boosts is not None:
+        fw.boosts = req.boosts
     fw.updated_at = datetime.now(timezone.utc)
     storage.save_framework(fw)
     return fw.model_dump(mode="json")
