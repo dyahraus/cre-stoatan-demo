@@ -8,7 +8,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ScoreBadge } from "@/components/shared/score-badge";
+import { ConfidenceDots, TierBadge } from "@/components/shared/tier-badge";
 import { SignalFlags } from "@/components/shared/signal-flags";
 import { MoveTypeBadge, TimeHorizonBadge } from "@/components/shared/enum-badge";
 import type { CompanyScore } from "@/lib/types";
@@ -32,6 +32,7 @@ export function RadarTable({ scores }: { scores: CompanyScore[] }) {
               <TableHead className="w-12 text-zinc-500">#</TableHead>
               <TableHead className="text-zinc-500">Ticker</TableHead>
               <TableHead className="text-zinc-500">Company</TableHead>
+              <TableHead className="text-zinc-500">Tier</TableHead>
               <TableHead className="text-zinc-500">Score</TableHead>
               <TableHead className="text-zinc-500">Move</TableHead>
               <TableHead className="text-zinc-500">Horizon</TableHead>
@@ -55,7 +56,15 @@ export function RadarTable({ scores }: { scores: CompanyScore[] }) {
                 </TableCell>
                 <TableCell className="text-zinc-300">{s.company_name}</TableCell>
                 <TableCell>
-                  <ScoreBadge score={s.composite_score} />
+                  <div className="flex items-center gap-2">
+                    <TierBadge tier={s.tier} size="sm" />
+                    <ConfidenceDots confidence={s.confidence} />
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <span className="font-mono text-zinc-200 tabular-nums text-sm">
+                    {(s.composite_score * 100).toFixed(0)}%
+                  </span>
                 </TableCell>
                 <TableCell>
                   <MoveTypeBadge moveType={s.dominant_move_type} />
@@ -103,9 +112,15 @@ export function RadarTable({ scores }: { scores: CompanyScore[] }) {
                 <span className="font-mono font-semibold text-blue-400">{s.ticker}</span>
                 <span className="text-zinc-400 text-sm truncate">{s.company_name}</span>
               </div>
-              <ScoreBadge score={s.composite_score} />
+              <div className="flex items-center gap-2">
+                <TierBadge tier={s.tier} size="sm" />
+                <span className="font-mono text-zinc-300 tabular-nums text-sm">
+                  {(s.composite_score * 100).toFixed(0)}%
+                </span>
+              </div>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
+              <ConfidenceDots confidence={s.confidence} />
               <MoveTypeBadge moveType={s.dominant_move_type} />
               <TimeHorizonBadge horizon={s.dominant_time_horizon} />
               <SignalFlags

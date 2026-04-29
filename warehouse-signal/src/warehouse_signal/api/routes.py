@@ -11,10 +11,15 @@ from warehouse_signal.models.schemas import (
     CompanyScore,
     MoveType,
     Sector,
+    SignalTier,
     TimeHorizon,
 )
 from warehouse_signal.radar.alerts import RadarFilter, filter_scores
-from warehouse_signal.scoring.aggregator import score_company
+from warehouse_signal.scoring.aggregator import score_company, score_transcript
+from warehouse_signal.scoring.tiers import (
+    TIER_BOUNDS,
+    TIER_DESCRIPTION,
+)
 
 router = APIRouter()
 
@@ -142,4 +147,67 @@ def api_enums() -> dict:
         "sectors": [s.value for s in Sector],
         "move_types": [m.value for m in MoveType],
         "time_horizons": [t.value for t in TimeHorizon],
+        "tiers": [t.value for t in SignalTier],
+        "tier_bounds": [
+            {"tier": t.value, "min_score": bound, "description": TIER_DESCRIPTION[t]}
+            for t, bound in TIER_BOUNDS
+        ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Per-transcript score + history (Phase 1C / 1D)
+# ---------------------------------------------------------------------------
+
+@router.get("/transcripts/{quarter_key}/score")
+def api_transcript_score(quarter_key: str) -> dict:
+    """Return the persisted TranscriptScore — fall back to a fresh compute
+    if none has been saved yet."""
+    storage = get_storage()
+    score = storage.get_transcript_score(quarter_key)
+    if score is None:
+        score = score_transcript(storage, quarter_key)
+        if score is None:
+            raise HTTPException(404, f"No score for {quarter_key}")
+    return score.model_dump(mode="json")
+
+
+@router.get("/companies/{ticker}/history")
+def api_company_history(ticker: str) -> list[dict]:
+    """Chronological list of TranscriptScore rows for a ticker."""
+    storage = get_storage()
+    scores = storage.get_transcript_scores_for_ticker(ticker.upper())
+    return [
+        {
+            "quarter_key": s.quarter_key,
+            "year": s.year,
+            "quarter": s.quarter,
+            "framework_id": s.framework_id,
+            "composite_score": s.composite_score,
+            "tier": s.tier.value,
+            "confidence": s.confidence,
+            "scored_at": s.scored_at.isoformat(),
+            "extracted_metrics": s.extracted_metrics.model_dump(),
+            "top_evidence": (
+                s.top_contributions[0].evidence_quote
+                if s.top_contributions
+                else ""
+            ),
+        }
+        for s in scores
+    ]
+
+
+@router.get("/companies")
+def api_companies(q: str | None = Query(None)) -> list[dict]:
+    """Lookup helper for the scan page's ticker validation chips.
+    Returns ticker + name (and sector) for known companies."""
+    storage = get_storage()
+    rows = list(storage.db["companies"].rows_where("active = 1"))
+    if q:
+        ql = q.upper()
+        rows = [r for r in rows if ql in r["ticker"].upper()]
+    return [
+        {"ticker": r["ticker"], "name": r["name"], "sector": r["sector"]}
+        for r in rows
+    ]

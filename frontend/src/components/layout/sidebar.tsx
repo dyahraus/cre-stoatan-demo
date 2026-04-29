@@ -5,7 +5,11 @@ import { usePathname } from "next/navigation";
 
 const NAV_ITEMS = [
   { href: "/demo", label: "Pipeline Demo" },
+  { href: "/scan", label: "Run a Scan" },
+  { href: "/radar", label: "Deal Radar" },
+  { href: "/framework", label: "Signal Framework" },
   { href: "/tracker", label: "Market Tracker" },
+  { href: "/how-it-works", label: "How it works" },
 ];
 
 function NavIcon({ href, className }: { href: string; className?: string }) {
@@ -25,6 +29,29 @@ function NavIcon({ href, className }: { href: string; className?: string }) {
           <circle cx="12" cy="12" r="6" />
           <circle cx="12" cy="12" r="2" />
           <path d="M12 2v4M12 18v4" />
+        </svg>
+      );
+    case "/scan":
+      return (
+        <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="7" />
+          <path d="M21 21l-4.35-4.35" />
+        </svg>
+      );
+    case "/framework":
+      return (
+        <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="7" height="7" rx="1" />
+          <rect x="14" y="3" width="7" height="7" rx="1" />
+          <rect x="3" y="14" width="7" height="7" rx="1" />
+          <path d="M14 14h4M14 18h7M14 22h5" />
+        </svg>
+      );
+    case "/how-it-works":
+      return (
+        <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10" />
+          <path d="M9.5 9.5a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 4M12 17v.5" />
         </svg>
       );
     case "/geography":

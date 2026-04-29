@@ -9,6 +9,8 @@ import { ScorePanel } from "@/components/company/score-panel";
 import { SignalDetails } from "@/components/company/signal-details";
 import { EvidenceList } from "@/components/company/evidence-list";
 import { ExtractionTable } from "@/components/company/extraction-table";
+import { ScoreHistory } from "@/components/company/score-history";
+import { ContributionList } from "@/components/company/contribution-list";
 
 export default function CompanyDetailPage() {
   const params = useParams<{ ticker: string }>();
@@ -58,6 +60,16 @@ export default function CompanyDetailPage() {
         <ScorePanel score={score} />
         <SignalDetails score={score} />
       </div>
+
+      <ScoreHistory ticker={ticker} />
+
+      {score.score_components && score.top_contributions && score.top_contributions.length > 0 && (
+        <ContributionList
+          components={score.score_components}
+          contributions={score.top_contributions}
+          composite={score.composite_score}
+        />
+      )}
 
       <EvidenceList snippets={score.evidence_snippets} />
       <ExtractionTable extractions={extractions} />

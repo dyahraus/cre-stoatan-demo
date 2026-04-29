@@ -367,7 +367,7 @@ def demo_score(req: ScoreRequest) -> dict:
     has_capex = any(bool(ext.get("signals", {}).get("capex_expansion")) for ext in req.extractions)
     has_bts = any(bool(ext.get("signals", {}).get("build_to_suit")) for ext in req.extractions)
     has_lm = any(bool(ext.get("signals", {}).get("last_mile_expansion")) for ext in req.extractions)
-    flag_bonus = 0.05 * sum([has_capex, has_bts, has_lm])
+    flag_bonus = sum([has_capex, has_bts, has_lm]) / 3.0
 
     # Best time horizon
     time_horizons = [r["time_horizon"] for r in rows]

@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { ScoreBadge } from "@/components/shared/score-badge";
+import { ConfidenceDots, TierBadge } from "@/components/shared/tier-badge";
 import { formatPercent, formatSector } from "@/lib/format";
 import type { CompanyScore } from "@/lib/types";
 
@@ -20,7 +20,10 @@ export function ScorePanel({ score }: { score: CompanyScore }) {
               {formatSector(score.sector)}
             </p>
           </div>
-          <ScoreBadge score={score.composite_score} />
+          <div className="flex flex-col items-end gap-1">
+            <TierBadge tier={score.tier} />
+            <ConfidenceDots confidence={score.confidence} />
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">

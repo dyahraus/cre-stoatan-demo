@@ -42,6 +42,9 @@ class Config:
     EXTRACTION_CONCURRENCY: int = int(os.getenv("EXTRACTION_CONCURRENCY", "3"))
     EXTRACTION_MAX_TOKENS: int = int(os.getenv("EXTRACTION_MAX_TOKENS", "1024"))
 
+    # Batch scan settings
+    SCAN_MAX_COMPANIES: int = int(os.getenv("SCAN_MAX_COMPANIES", "25"))
+
     @classmethod
     def validate(cls) -> list[str]:
         """Return a list of configuration warnings/errors."""

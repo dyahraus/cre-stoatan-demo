@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -38,6 +38,21 @@ class Sector(str, Enum):
     AUTOMOTIVE = "automotive"
     CONSTRUCTION = "construction"
     OTHER = "other"
+
+
+class SignalTier(str, Enum):
+    """Plain-English tier shown to users instead of a bare 0..1 number."""
+    STRONG = "strong"
+    MODERATE = "moderate"
+    WATCHLIST = "watchlist"
+    NOISE = "noise"
+
+
+class KeywordCategory(str, Enum):
+    """Top-level keyword grouping in a signal framework."""
+    INDUSTRIAL_TRANSFORMATION = "industrial_transformation"
+    SUPPLY_CHAIN = "supply_chain"
+    COMMITMENT_LEVEL = "commitment_level"
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +215,41 @@ class ChunkExtraction(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Score components (used by both CompanyScore and TranscriptScore)
+# ---------------------------------------------------------------------------
+
+class ScoreComponents(BaseModel):
+    """Weighted breakdown of a composite score so the user can see how it's built."""
+    max_expansion: float = 0.0
+    weighted_avg: float = 0.0
+    flag_bonus: float = 0.0
+    time_bonus: float = 0.0
+    keyword_component: float = 0.0
+    commitment_component: float = 0.0
+
+
+class ChunkContribution(BaseModel):
+    """One chunk's contribution to a composite score."""
+    chunk_id: str
+    chunk_index: int
+    section_type: SectionType = SectionType.FULL
+    contribution: float = 0.0
+    expansion_score: float = 0.0
+    warehouse_relevance: float = 0.0
+    keyword_hit_count: int = 0
+    evidence_quote: str = ""
+    reasoning: str = ""
+
+
+class ExtractedMetrics(BaseModel):
+    """Concrete numbers brokers care about, summed/aggregated across chunks."""
+    capex_amount_usd: Optional[int] = None
+    square_footage_sqft: Optional[int] = None
+    facility_count: Optional[int] = None
+    target_completion: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
 # Company Score
 # ---------------------------------------------------------------------------
 
@@ -209,6 +259,8 @@ class CompanyScore(BaseModel):
     company_name: str
     sector: Sector = Sector.OTHER
     composite_score: float = Field(ge=0.0, le=1.0)
+    tier: SignalTier = SignalTier.NOISE
+    confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     avg_warehouse_relevance: float = 0.0
     avg_expansion_score: float = 0.0
     max_expansion_score: float = 0.0
@@ -222,4 +274,103 @@ class CompanyScore(BaseModel):
     has_last_mile: bool = False
     evidence_snippets: list[str] = Field(default_factory=list)
     transcript_keys: list[str] = Field(default_factory=list)
+    score_components: Optional[ScoreComponents] = None
+    top_contributions: list[ChunkContribution] = Field(default_factory=list)
     scored_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# ---------------------------------------------------------------------------
+# Signal Framework (configurable keyword library)
+# ---------------------------------------------------------------------------
+
+class SignalKeyword(BaseModel):
+    """A single keyword/phrase rule within a framework."""
+    id: str
+    framework_id: str
+    category: KeywordCategory
+    phrase: str
+    is_regex: bool = False
+    weight: float = Field(ge=1.0, le=10.0, default=5.0)
+    # Optional regex that must match within COMPANION_WINDOW tokens of the phrase.
+    # Used for commitment keywords that require a $ amount, sqft, or specific date.
+    companion_pattern: Optional[str] = None
+    notes: str = ""
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class SignalFramework(BaseModel):
+    """A named bundle of keywords and weights."""
+    id: str
+    name: str
+    description: str = ""
+    is_default: bool = False
+    keywords: list[SignalKeyword] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class KeywordHit(BaseModel):
+    """A single literal match of a SignalKeyword against a chunk."""
+    keyword_id: str
+    chunk_id: str
+    transcript_key: str
+    category: KeywordCategory
+    phrase: str
+    match_text: str
+    match_offset: int
+    weight_contribution: float
+
+
+# ---------------------------------------------------------------------------
+# Per-transcript score
+# ---------------------------------------------------------------------------
+
+class TranscriptScore(BaseModel):
+    """First-class per-transcript score record."""
+    quarter_key: str
+    ticker: str
+    year: int
+    quarter: int
+    framework_id: str
+    composite_score: float = Field(ge=0.0, le=1.0, default=0.0)
+    tier: SignalTier = SignalTier.NOISE
+    confidence: float = Field(ge=0.0, le=1.0, default=0.0)
+    score_components: ScoreComponents = Field(default_factory=ScoreComponents)
+    top_contributions: list[ChunkContribution] = Field(default_factory=list)
+    keyword_hit_summary: dict[str, int] = Field(default_factory=dict)
+    extracted_metrics: ExtractedMetrics = Field(default_factory=ExtractedMetrics)
+    num_relevant_chunks: int = 0
+    total_chunks: int = 0
+    scored_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# ---------------------------------------------------------------------------
+# Watchlists & Scan Jobs (Phase 3)
+# ---------------------------------------------------------------------------
+
+class Watchlist(BaseModel):
+    id: str
+    name: str
+    tickers: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ScanJobStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+
+class ScanJob(BaseModel):
+    id: str
+    status: ScanJobStatus = ScanJobStatus.PENDING
+    params: dict[str, Any] = Field(default_factory=dict)
+    progress: dict[str, Any] = Field(default_factory=dict)
+    results_summary: dict[str, Any] = Field(default_factory=dict)
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    error: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
