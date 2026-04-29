@@ -126,12 +126,39 @@ export interface SignalKeyword {
   created_at: string;
 }
 
+export type ConceptMode = "embedding" | "llm";
+
+export interface SignalConcept {
+  id: string;
+  framework_id: string;
+  category: KeywordCategory;
+  label: string;
+  description: string;
+  example_phrases: string[];
+  weight: number;
+  threshold: number;
+  mode: ConceptMode;
+  created_at: string;
+}
+
+export interface ConceptHit {
+  concept_id: string;
+  chunk_id: string;
+  transcript_key: string;
+  category: KeywordCategory;
+  label: string;
+  similarity: number;
+  weight_contribution: number;
+  mode_used: ConceptMode;
+}
+
 export interface SignalFramework {
   id: string;
   name: string;
   description: string;
   is_default: boolean;
   keywords: SignalKeyword[];
+  concepts?: SignalConcept[];
   boosts?: BoostConfig;
   created_at: string;
   updated_at: string;
@@ -151,12 +178,17 @@ export interface KeywordHit {
 export interface DryRunResult {
   framework_id: string;
   hits: KeywordHit[];
+  concept_hits?: ConceptHit[];
   keyword_score: number;
+  concept_score?: number;
   commitment_score: number;
   hybrid_chunk_score: number;
   llm_expansion_score: number;
   summary: Record<string, number>;
+  concept_summary?: Record<string, number>;
   total_hits: number;
+  total_concept_hits?: number;
+  embedder?: string;
 }
 
 export interface ScoreComponents {
@@ -166,6 +198,7 @@ export interface ScoreComponents {
   time_bonus: number;
   keyword_component: number;
   commitment_component: number;
+  concept_component?: number;
   boost_multiplier?: number;
 }
 

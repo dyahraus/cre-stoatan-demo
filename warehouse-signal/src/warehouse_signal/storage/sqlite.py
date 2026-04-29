@@ -20,6 +20,8 @@ from warehouse_signal.models.schemas import (
     ChunkExtraction,
     Company,
     CompanyScore,
+    ConceptHit,
+    ConceptMode,
     ExtractedMetrics,
     KeywordCategory,
     KeywordHit,
@@ -28,6 +30,7 @@ from warehouse_signal.models.schemas import (
     ScanJobStatus,
     ScoreComponents,
     Sector,
+    SignalConcept,
     SignalFramework,
     SignalKeyword,
     SignalTier,
@@ -305,6 +308,51 @@ class Storage:
                 if_not_exists=True,
             )
 
+        # Semantic concepts (Phase 6D)
+        if "signal_concepts" not in self.db.table_names():
+            self.db["signal_concepts"].create(
+                {
+                    "id": str,
+                    "framework_id": str,
+                    "category": str,
+                    "label": str,
+                    "description": str,
+                    "example_phrases_json": str,
+                    "weight": float,
+                    "threshold": float,
+                    "mode": str,
+                    "created_at": str,
+                },
+                pk="id",
+                if_not_exists=True,
+            )
+            self.db["signal_concepts"].create_index(
+                ["framework_id"], if_not_exists=True
+            )
+
+        if "concept_hits" not in self.db.table_names():
+            self.db["concept_hits"].create(
+                {
+                    "id": str,
+                    "concept_id": str,
+                    "chunk_id": str,
+                    "transcript_key": str,
+                    "framework_id": str,
+                    "category": str,
+                    "label": str,
+                    "similarity": float,
+                    "weight_contribution": float,
+                    "mode_used": str,
+                    "created_at": str,
+                },
+                pk="id",
+                if_not_exists=True,
+            )
+            self.db["concept_hits"].create_index(["chunk_id"], if_not_exists=True)
+            self.db["concept_hits"].create_index(
+                ["transcript_key"], if_not_exists=True
+            )
+
         # Seed a default signal framework if none exists yet
         self._seed_default_framework_if_empty()
 
@@ -396,6 +444,29 @@ class Storage:
                 },
                 pk="chunk_id",
             )
+
+    def save_chunk_embedding(self, chunk_id: str, vector: list[float]) -> None:
+        """Persist a chunk's embedding so we never re-embed the same text."""
+        if not vector:
+            return
+        self.db["chunks"].upsert(
+            {"chunk_id": chunk_id, "embedding_json": json.dumps(vector)},
+            pk="chunk_id",
+            alter=True,
+        )
+
+    def get_chunk_embedding(self, chunk_id: str) -> list[float]:
+        try:
+            row = self.db["chunks"].get(chunk_id)
+        except sqlite_utils.db.NotFoundError:
+            return []
+        raw = row.get("embedding_json")
+        if not raw:
+            return []
+        try:
+            return list(json.loads(raw))
+        except (TypeError, json.JSONDecodeError):
+            return []
 
     def get_unprocessed_transcripts(self, limit: int = 50) -> list[dict]:
         """Get transcript keys that haven't been analyzed yet."""
@@ -645,6 +716,13 @@ class Storage:
         )
         for kw in framework.keywords:
             self._save_keyword_row(kw)
+        # Replace the concept set
+        self.db.execute(
+            "DELETE FROM signal_concepts WHERE framework_id = ?",
+            [framework.id],
+        )
+        for concept in framework.concepts:
+            self._save_concept_row(concept)
 
     def _save_keyword_row(self, kw: SignalKeyword) -> None:
         self.db["signal_keywords"].upsert(
@@ -696,6 +774,13 @@ class Storage:
         )
         keywords = [self._row_to_keyword(k) for k in kw_rows]
 
+        concept_rows = list(
+            self.db["signal_concepts"].rows_where(
+                "framework_id = ?", [row["id"]], order_by="category, label"
+            )
+        )
+        concepts = [self._row_to_concept(c) for c in concept_rows]
+
         boost_raw = row.get("boost_config_json")
         if boost_raw:
             try:
@@ -711,9 +796,106 @@ class Storage:
             description=row.get("description") or "",
             is_default=bool(row.get("is_default")),
             keywords=keywords,
+            concepts=concepts,
             boosts=boosts,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    # ------------------------------------------------------------------
+    # Concepts
+    # ------------------------------------------------------------------
+
+    def _save_concept_row(self, concept: SignalConcept) -> None:
+        self.db["signal_concepts"].upsert(
+            {
+                "id": concept.id,
+                "framework_id": concept.framework_id,
+                "category": concept.category.value,
+                "label": concept.label,
+                "description": concept.description,
+                "example_phrases_json": json.dumps(concept.example_phrases),
+                "weight": concept.weight,
+                "threshold": concept.threshold,
+                "mode": concept.mode.value,
+                "created_at": concept.created_at.isoformat(),
+            },
+            pk="id",
+        )
+
+    def _row_to_concept(self, row: dict) -> SignalConcept:
+        try:
+            phrases = json.loads(row.get("example_phrases_json") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            phrases = []
+        return SignalConcept(
+            id=row["id"],
+            framework_id=row["framework_id"],
+            category=KeywordCategory(row["category"]),
+            label=row["label"],
+            description=row.get("description") or "",
+            example_phrases=list(phrases),
+            weight=row["weight"],
+            threshold=row["threshold"],
+            mode=ConceptMode(row["mode"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    def add_concept(self, concept: SignalConcept) -> None:
+        self._save_concept_row(concept)
+
+    def update_concept(self, concept: SignalConcept) -> None:
+        self._save_concept_row(concept)
+
+    def delete_concept(self, concept_id: str) -> None:
+        self.db.execute(
+            "DELETE FROM concept_hits WHERE concept_id = ?", [concept_id]
+        )
+        try:
+            self.db["signal_concepts"].delete(concept_id)
+        except sqlite_utils.db.NotFoundError:
+            pass
+
+    def replace_concept_hits_for_chunk(
+        self, chunk_id: str, framework_id: str, hits: list[ConceptHit]
+    ) -> None:
+        """Replace the per-chunk concept-hit set (idempotent rescore)."""
+        self.db.execute(
+            "DELETE FROM concept_hits WHERE chunk_id = ? AND framework_id = ?",
+            [chunk_id, framework_id],
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        for hit in hits:
+            self.db["concept_hits"].insert(
+                {
+                    "id": str(uuid.uuid4()),
+                    "concept_id": hit.concept_id,
+                    "chunk_id": hit.chunk_id,
+                    "transcript_key": hit.transcript_key,
+                    "framework_id": framework_id,
+                    "category": hit.category.value,
+                    "label": hit.label,
+                    "similarity": hit.similarity,
+                    "weight_contribution": hit.weight_contribution,
+                    "mode_used": hit.mode_used.value,
+                    "created_at": now,
+                }
+            )
+
+    def get_concept_hits_for_transcript(
+        self, quarter_key: str, framework_id: str | None = None
+    ) -> list[dict]:
+        if framework_id:
+            return list(
+                self.db["concept_hits"].rows_where(
+                    "transcript_key = ? AND framework_id = ?",
+                    [quarter_key, framework_id],
+                )
+            )
+        return list(
+            self.db["concept_hits"].rows_where(
+                "transcript_key = ?", [quarter_key]
+            )
         )
 
     def _row_to_keyword(self, row: dict) -> SignalKeyword:

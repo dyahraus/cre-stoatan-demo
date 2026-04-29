@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from warehouse_signal.analysis.concept_engine import detect as detect_concepts
+from warehouse_signal.analysis.embeddings import NullEmbedder, get_embedder
 from warehouse_signal.analysis.extractor import ClaudeAnalyzer
 from warehouse_signal.analysis.keyword_engine import compile_framework, detect
 from warehouse_signal.api.deps import get_storage
@@ -192,6 +194,26 @@ async def refresh_transcript_score(
         for chunk in chunks:
             hits = detect(chunk, framework, compiled=compiled)
             storage.replace_keyword_hits_for_chunk(chunk.chunk_id, hits)
+
+        # Concept detection: only when the framework has concepts AND an
+        # embedder is configured. NullEmbedder = silently skip.
+        if framework.concepts:
+            embedder = get_embedder()
+            if not isinstance(embedder, NullEmbedder):
+                for chunk in chunks:
+                    vec = storage.get_chunk_embedding(chunk.chunk_id)
+                    if not vec:
+                        vec = embedder.embed(chunk.text)
+                        if vec:
+                            storage.save_chunk_embedding(chunk.chunk_id, vec)
+                    if not vec:
+                        continue
+                    c_hits = detect_concepts(
+                        chunk, framework.concepts, vec, embedder=embedder
+                    )
+                    storage.replace_concept_hits_for_chunk(
+                        chunk.chunk_id, framework.id, c_hits
+                    )
 
     if req.run_llm:
         if not Config.ANTHROPIC_API_KEY:

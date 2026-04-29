@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  addConcept,
   addKeyword,
   createFramework,
+  deleteConcept,
   deleteFramework,
   deleteKeyword,
   dryRunFramework,
@@ -11,6 +13,7 @@ import {
   fetchFrameworks,
   frameworkTemplateUrl,
   importKeywordsCSV,
+  patchConcept,
   patchFramework,
   patchKeyword,
 } from "@/lib/api";
@@ -19,6 +22,7 @@ import type {
   BoostConfig,
   DryRunResult,
   KeywordCategory,
+  SignalConcept,
   SignalFramework,
   SignalKeyword,
 } from "@/lib/types";
@@ -232,6 +236,14 @@ export default function FrameworkPage() {
         onError={(m) => setErr(m)}
       />
 
+      {/* Semantic concepts (Phase 6D) */}
+      <ConceptsPanel
+        framework={framework}
+        embedderStatus={dryRunResult?.embedder}
+        onMutated={reload}
+        onError={(m) => setErr(m)}
+      />
+
       {/* Dry-run panel */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4 space-y-3">
         <div className="flex justify-between items-baseline">
@@ -258,10 +270,14 @@ export default function FrameworkPage() {
 
         {dryRunResult && (
           <div className="space-y-3 mt-4">
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <Stat
-                label="Total hits"
+                label="Keyword hits"
                 value={dryRunResult.total_hits.toString()}
+              />
+              <Stat
+                label="Concept hits"
+                value={(dryRunResult.total_concept_hits ?? 0).toString()}
               />
               <Stat
                 label="Keyword score"
@@ -272,7 +288,9 @@ export default function FrameworkPage() {
                 value={`${(dryRunResult.hybrid_chunk_score * 100).toFixed(0)}%`}
               />
             </div>
-            <div className="space-y-2 max-h-64 overflow-y-auto">
+
+            {/* Keyword hits */}
+            <div className="space-y-2 max-h-48 overflow-y-auto">
               {dryRunResult.hits.length === 0 && (
                 <p className="text-xs text-zinc-500">No keyword matches.</p>
               )}
@@ -293,6 +311,39 @@ export default function FrameworkPage() {
                 </div>
               ))}
             </div>
+
+            {/* Concept hits */}
+            {dryRunResult.concept_hits && dryRunResult.concept_hits.length > 0 && (
+              <div className="space-y-2 max-h-48 overflow-y-auto border-t border-zinc-800 pt-2">
+                <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+                  Semantic concept hits ·{" "}
+                  {(dryRunResult.concept_score ?? 0 * 100).toFixed(0)}% concept score
+                </div>
+                {dryRunResult.concept_hits.map((h, i) => (
+                  <div
+                    key={i}
+                    className="rounded border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs"
+                  >
+                    <span className="inline-block px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 mr-2 uppercase tracking-wider text-[10px]">
+                      {h.category.replace(/_/g, " ")}
+                    </span>
+                    <span className="text-zinc-100">{h.label}</span>
+                    <span className="text-zinc-500 ml-2 font-mono">
+                      sim {h.similarity.toFixed(3)} · contribution{" "}
+                      {h.weight_contribution.toFixed(1)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {dryRunResult.embedder &&
+              dryRunResult.embedder !== "none" &&
+              dryRunResult.embedder !== "missing-key" && (
+                <p className="text-[10px] text-zinc-600">
+                  Embedder: {dryRunResult.embedder}
+                </p>
+              )}
           </div>
         )}
       </div>
@@ -430,6 +481,333 @@ function Stat({ label, value }: { label: string; value: string }) {
         {label}
       </div>
       <div className="text-sm font-mono text-white mt-0.5">{value}</div>
+    </div>
+  );
+}
+
+function ConceptsPanel({
+  framework,
+  embedderStatus,
+  onMutated,
+  onError,
+}: {
+  framework: SignalFramework;
+  embedderStatus?: string;
+  onMutated: () => void;
+  onError: (msg: string) => void;
+}) {
+  const concepts = framework.concepts ?? [];
+  const [busy, setBusy] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState({
+    label: "",
+    description: "",
+    examples: "",
+    category: "industrial_transformation" as KeywordCategory,
+    weight: 6,
+    threshold: 0.65,
+  });
+
+  function resetDraft() {
+    setDraft({
+      label: "",
+      description: "",
+      examples: "",
+      category: "industrial_transformation",
+      weight: 6,
+      threshold: 0.65,
+    });
+  }
+
+  async function onCreate() {
+    if (!draft.label.trim()) return;
+    setBusy(true);
+    try {
+      await addConcept(framework.id, {
+        category: draft.category,
+        label: draft.label.trim(),
+        description: draft.description.trim(),
+        example_phrases: draft.examples
+          .split("\n")
+          .map((s) => s.trim())
+          .filter(Boolean),
+        weight: draft.weight,
+        threshold: draft.threshold,
+      });
+      onMutated();
+      setCreating(false);
+      resetDraft();
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onPatch(c: SignalConcept, body: Partial<SignalConcept>) {
+    try {
+      await patchConcept(framework.id, c.id, body);
+      onMutated();
+    } catch (e) {
+      onError((e as Error).message);
+    }
+  }
+
+  async function onDelete(c: SignalConcept) {
+    if (!confirm(`Delete concept "${c.label}"?`)) return;
+    try {
+      await deleteConcept(framework.id, c.id);
+      onMutated();
+    } catch (e) {
+      onError((e as Error).message);
+    }
+  }
+
+  const noKey = embedderStatus === "missing-key" || embedderStatus === "none";
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4 space-y-4">
+      <div className="flex justify-between items-baseline">
+        <div>
+          <h3 className="text-sm font-semibold text-white">
+            Semantic concepts
+          </h3>
+          <p className="text-xs text-zinc-500 mt-1">
+            Match by meaning, not literal phrase. Each concept gets a weight
+            and a similarity threshold; chunks above the threshold fire
+            partial-credit hits scaled by how far above they sit.
+          </p>
+        </div>
+        <button
+          onClick={() => setCreating((v) => !v)}
+          disabled={busy}
+          className="rounded bg-blue-600 hover:bg-blue-500 text-white text-xs px-2.5 py-1.5 disabled:opacity-50"
+        >
+          + New concept
+        </button>
+      </div>
+
+      {noKey && concepts.length > 0 && (
+        <div className="rounded border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-200">
+          Concepts are defined but no embedding provider is configured. Set{" "}
+          <code className="font-mono">VOYAGE_API_KEY</code> on the backend
+          (or <code className="font-mono">EMBEDDING_PROVIDER=openai</code>{" "}
+          plus <code className="font-mono">OPENAI_API_KEY</code>) to enable
+          semantic detection.
+        </div>
+      )}
+
+      {creating && (
+        <div className="rounded border border-blue-500/30 bg-blue-500/5 p-3 space-y-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <input
+              value={draft.label}
+              onChange={(e) => setDraft({ ...draft, label: e.target.value })}
+              placeholder="Label (e.g. 'warehouse capacity constraints')"
+              className="rounded bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
+            />
+            <select
+              value={draft.category}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  category: e.target.value as KeywordCategory,
+                })
+              }
+              className="rounded bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
+            >
+              <option value="industrial_transformation">
+                industrial_transformation
+              </option>
+              <option value="supply_chain">supply_chain</option>
+              <option value="commitment_level">commitment_level</option>
+            </select>
+          </div>
+          <input
+            value={draft.description}
+            onChange={(e) =>
+              setDraft({ ...draft, description: e.target.value })
+            }
+            placeholder="Description — describes what this concept means in plain English"
+            className="w-full rounded bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
+          />
+          <textarea
+            value={draft.examples}
+            onChange={(e) =>
+              setDraft({ ...draft, examples: e.target.value })
+            }
+            placeholder={"Example phrases — one per line.\nUsed alongside description to compute the concept's reference vector."}
+            rows={3}
+            className="w-full rounded bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm font-mono text-zinc-200 focus:border-blue-500 focus:outline-none"
+          />
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-xs text-zinc-400 space-y-1">
+              <span>
+                Weight: <span className="font-mono">{draft.weight.toFixed(1)}</span>
+              </span>
+              <input
+                type="range"
+                min={1}
+                max={10}
+                step={0.5}
+                value={draft.weight}
+                onChange={(e) =>
+                  setDraft({ ...draft, weight: parseFloat(e.target.value) })
+                }
+                className="w-full accent-blue-500"
+              />
+            </label>
+            <label className="text-xs text-zinc-400 space-y-1">
+              <span>
+                Threshold:{" "}
+                <span className="font-mono">{draft.threshold.toFixed(2)}</span>
+              </span>
+              <input
+                type="range"
+                min={0.5}
+                max={0.9}
+                step={0.01}
+                value={draft.threshold}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    threshold: parseFloat(e.target.value),
+                  })
+                }
+                className="w-full accent-blue-500"
+              />
+            </label>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => {
+                setCreating(false);
+                resetDraft();
+              }}
+              className="text-xs text-zinc-500 hover:text-zinc-300 px-2 py-1.5"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={onCreate}
+              disabled={busy || !draft.label.trim()}
+              className="rounded bg-blue-600 hover:bg-blue-500 text-white text-xs px-3 py-1.5 disabled:opacity-50"
+            >
+              Create concept
+            </button>
+          </div>
+        </div>
+      )}
+
+      {concepts.length === 0 && !creating && (
+        <p className="text-xs text-zinc-600 italic">
+          No semantic concepts yet. Concepts complement keywords — paraphrase-
+          tolerant detection that fires even when literal phrases don&apos;t.
+        </p>
+      )}
+
+      {concepts.length > 0 && (
+        <div className="space-y-2">
+          {concepts.map((c) => (
+            <ConceptRow
+              key={c.id}
+              concept={c}
+              onPatch={(body) => onPatch(c, body)}
+              onDelete={() => onDelete(c)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConceptRow({
+  concept,
+  onPatch,
+  onDelete,
+}: {
+  concept: SignalConcept;
+  onPatch: (body: Partial<SignalConcept>) => void;
+  onDelete: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="rounded border border-zinc-800 bg-zinc-900 px-3 py-2">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="text-zinc-500 hover:text-zinc-300 text-xs"
+          aria-label="Expand"
+        >
+          {expanded ? "▾" : "▸"}
+        </button>
+        <span className="font-medium text-sm text-zinc-100 flex-1 truncate">
+          {concept.label}
+        </span>
+        <span className="text-[10px] uppercase tracking-wider text-zinc-500">
+          {concept.category.replace(/_/g, " ")}
+        </span>
+        <span className="font-mono text-xs text-zinc-300 tabular-nums">
+          w {concept.weight.toFixed(1)} · θ {concept.threshold.toFixed(2)}
+        </span>
+        <button
+          onClick={onDelete}
+          className="text-zinc-600 hover:text-red-400 text-xs"
+          aria-label="Delete concept"
+        >
+          ×
+        </button>
+      </div>
+      {expanded && (
+        <div className="mt-2 space-y-2 text-xs">
+          {concept.description && (
+            <p className="text-zinc-400 italic">{concept.description}</p>
+          )}
+          {concept.example_phrases.length > 0 && (
+            <ul className="space-y-0.5 font-mono text-zinc-500">
+              {concept.example_phrases.map((p, i) => (
+                <li key={i}>· {p}</li>
+              ))}
+            </ul>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <label className="space-y-1">
+              <span className="text-zinc-500">
+                Weight: <span className="font-mono">{concept.weight.toFixed(1)}</span>
+              </span>
+              <input
+                type="range"
+                min={1}
+                max={10}
+                step={0.5}
+                value={concept.weight}
+                onChange={(e) =>
+                  onPatch({ weight: parseFloat(e.target.value) })
+                }
+                className="w-full accent-blue-500"
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-zinc-500">
+                Threshold:{" "}
+                <span className="font-mono">{concept.threshold.toFixed(2)}</span>
+              </span>
+              <input
+                type="range"
+                min={0.5}
+                max={0.9}
+                step={0.01}
+                value={concept.threshold}
+                onChange={(e) =>
+                  onPatch({ threshold: parseFloat(e.target.value) })
+                }
+                className="w-full accent-blue-500"
+              />
+            </label>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

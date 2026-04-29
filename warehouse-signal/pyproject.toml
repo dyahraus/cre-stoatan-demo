@@ -19,6 +19,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
     "pypdf>=4.0",
+    "voyageai>=0.3",
 ]
 
 [project.optional-dependencies]

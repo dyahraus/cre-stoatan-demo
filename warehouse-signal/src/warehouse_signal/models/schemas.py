@@ -55,6 +55,12 @@ class KeywordCategory(str, Enum):
     COMMITMENT_LEVEL = "commitment_level"
 
 
+class ConceptMode(str, Enum):
+    """How a SignalConcept matches: vector embeddings or LLM judgment."""
+    EMBEDDING = "embedding"
+    LLM = "llm"
+
+
 # ---------------------------------------------------------------------------
 # Company
 # ---------------------------------------------------------------------------
@@ -226,6 +232,7 @@ class ScoreComponents(BaseModel):
     time_bonus: float = 0.0
     keyword_component: float = 0.0
     commitment_component: float = 0.0
+    concept_component: float = 0.0
     boost_multiplier: float = 1.0
 
 
@@ -312,6 +319,37 @@ class SignalKeyword(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class SignalConcept(BaseModel):
+    """A semantic concept — matched against chunk embeddings.
+
+    Tolerant of paraphrase: a chunk that says "we lack the storage
+    capacity to support continued growth" can fire on the concept
+    "warehouse capacity constraints" without literal phrase overlap.
+    """
+    id: str
+    framework_id: str
+    category: KeywordCategory
+    label: str
+    description: str = ""
+    example_phrases: list[str] = Field(default_factory=list)
+    weight: float = Field(ge=1.0, le=10.0, default=5.0)
+    threshold: float = Field(ge=0.5, le=0.9, default=0.65)
+    mode: ConceptMode = ConceptMode.EMBEDDING
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ConceptHit(BaseModel):
+    """A single semantic match of a SignalConcept against a chunk."""
+    concept_id: str
+    chunk_id: str
+    transcript_key: str
+    category: KeywordCategory
+    label: str
+    similarity: float
+    weight_contribution: float
+    mode_used: ConceptMode = ConceptMode.EMBEDDING
+
+
 class SignalFramework(BaseModel):
     """A named bundle of keywords and weights."""
     id: str
@@ -319,6 +357,7 @@ class SignalFramework(BaseModel):
     description: str = ""
     is_default: bool = False
     keywords: list[SignalKeyword] = Field(default_factory=list)
+    concepts: list[SignalConcept] = Field(default_factory=list)
     boosts: BoostConfig = Field(default_factory=BoostConfig)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

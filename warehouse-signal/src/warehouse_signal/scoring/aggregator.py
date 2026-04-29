@@ -23,6 +23,7 @@ import json
 from collections import Counter
 from datetime import datetime, timezone
 
+from warehouse_signal.analysis.concept_engine import concept_score
 from warehouse_signal.analysis.keyword_engine import (
     commitment_evidence_bonus,
     hits_summary_by_category,
@@ -32,6 +33,8 @@ from warehouse_signal.models.schemas import (
     BoostConfig,
     ChunkContribution,
     CompanyScore,
+    ConceptHit,
+    ConceptMode,
     ExtractedMetrics,
     KeywordCategory,
     KeywordHit,
@@ -52,8 +55,12 @@ from warehouse_signal.storage.sqlite import Storage
 RELEVANCE_THRESHOLD = 0.3
 
 # Hybrid chunk-score weights (must sum to 1.0).
-W_LLM = 0.55
-W_KEYWORD = 0.30
+# Concepts slot in alongside keywords once the engine has any concepts +
+# a configured embedder; otherwise the concept term is 0 and the math
+# still hits 1.0 from the other three.
+W_LLM = 0.40
+W_KEYWORD = 0.25
+W_CONCEPT = 0.20
 W_COMMITMENT = 0.15
 
 # Transcript-level composite weights (must sum to 1.0).
@@ -78,17 +85,24 @@ TIME_WEIGHTS: dict[str, float] = {
 # ---------------------------------------------------------------------------
 
 def compute_chunk_score(
-    llm_expansion: float, kw_hits: list[KeywordHit]
-) -> tuple[float, float, float]:
-    """Return (hybrid_score, kw_score_component, commitment_component)."""
+    llm_expansion: float,
+    kw_hits: list[KeywordHit],
+    concept_hits: list[ConceptHit] | None = None,
+) -> tuple[float, float, float, float]:
+    """Hybrid chunk score across LLM + keyword + concept + commitment.
+
+    Returns (hybrid_score, kw_part, commit_part, concept_part).
+    """
     kw_part = keyword_score(kw_hits)
     commit_part = commitment_evidence_bonus(kw_hits)
+    concept_part = concept_score(concept_hits or [])
     hybrid = (
         W_LLM * llm_expansion
         + W_KEYWORD * kw_part
+        + W_CONCEPT * concept_part
         + W_COMMITMENT * commit_part
     )
-    return round(hybrid, 4), kw_part, commit_part
+    return round(hybrid, 4), kw_part, commit_part, concept_part
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +195,27 @@ def score_transcript(
             continue
         hits_by_chunk.setdefault(kh.chunk_id, []).append(kh)
 
+    # Concept hits — keyed per (chunk, framework) so re-running with a
+    # different framework doesn't pollute another framework's history.
+    concepts_by_chunk: dict[str, list[ConceptHit]] = {}
+    for ch_row in storage.get_concept_hits_for_transcript(
+        quarter_key, framework.id
+    ):
+        try:
+            ch = ConceptHit(
+                concept_id=ch_row["concept_id"],
+                chunk_id=ch_row["chunk_id"],
+                transcript_key=ch_row["transcript_key"],
+                category=KeywordCategory(ch_row["category"]),
+                label=ch_row["label"],
+                similarity=ch_row["similarity"],
+                weight_contribution=ch_row["weight_contribution"],
+                mode_used=ConceptMode(ch_row["mode_used"]),
+            )
+        except (ValueError, KeyError):
+            continue
+        concepts_by_chunk.setdefault(ch.chunk_id, []).append(ch)
+
     # Pull ticker/year/quarter from the transcript row
     transcript_row = storage.db["transcripts"].get(quarter_key)
     ticker = transcript_row["ticker"]
@@ -203,18 +238,21 @@ def score_transcript(
     move_types: list[str] = []
 
     all_hits: list[KeywordHit] = []
+    all_concept_hits: list[ConceptHit] = []
     boost_multipliers: list[float] = []
     for chunk in chunks:
         cid = chunk["chunk_id"]
         ext = extractions.get(cid)
         kw_hits = hits_by_chunk.get(cid, [])
+        c_hits = concepts_by_chunk.get(cid, [])
         all_hits.extend(kw_hits)
+        all_concept_hits.extend(c_hits)
 
         llm_relevance = ext["warehouse_relevance"] if ext else 0.0
         llm_expansion = ext["expansion_score"] if ext else 0.0
 
-        base_score, kw_part, commit_part = compute_chunk_score(
-            llm_expansion, kw_hits
+        base_score, kw_part, commit_part, concept_part = compute_chunk_score(
+            llm_expansion, kw_hits, c_hits
         )
 
         # Apply section + speaker boosts from the framework
@@ -226,7 +264,9 @@ def score_transcript(
         )
 
         is_relevant = (
-            llm_relevance >= RELEVANCE_THRESHOLD or len(kw_hits) > 0
+            llm_relevance >= RELEVANCE_THRESHOLD
+            or len(kw_hits) > 0
+            or len(c_hits) > 0
         )
         if not is_relevant:
             continue
@@ -237,12 +277,16 @@ def score_transcript(
                 **(ext or {}),
                 "chunk_id": cid,
                 "warehouse_relevance": max(
-                    llm_relevance, kw_part  # treat keyword strength as a relevance floor
+                    llm_relevance,
+                    kw_part,
+                    concept_part,  # concept strength can also pull a chunk in
                 ),
                 "expansion_score": chunk_score_value,
                 "_kw_part": kw_part,
                 "_commit_part": commit_part,
+                "_concept_part": concept_part,
                 "_kw_count": len(kw_hits),
+                "_concept_count": len(c_hits),
             }
         )
         chunk_scores.append(chunk_score_value)
@@ -348,6 +392,10 @@ def score_transcript(
     commitment_component = round(
         sum(c["_commit_part"] for c in relevant_chunks) / len(relevant_chunks), 4
     )
+    concept_component = round(
+        sum(c["_concept_part"] for c in relevant_chunks) / len(relevant_chunks),
+        4,
+    )
 
     avg_boost = (
         round(sum(boost_multipliers) / len(boost_multipliers), 4)
@@ -362,6 +410,7 @@ def score_transcript(
         time_bonus=round(time_bonus, 4),
         keyword_component=keyword_component,
         commitment_component=commitment_component,
+        concept_component=concept_component,
         boost_multiplier=avg_boost,
     )
 

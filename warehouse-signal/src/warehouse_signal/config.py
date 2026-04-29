@@ -45,6 +45,15 @@ class Config:
     # Batch scan settings
     SCAN_MAX_COMPANIES: int = int(os.getenv("SCAN_MAX_COMPANIES", "25"))
 
+    # Embeddings (semantic concepts)
+    EMBEDDING_PROVIDER: str = os.getenv("EMBEDDING_PROVIDER", "voyage")
+    VOYAGE_API_KEY: str = os.getenv("VOYAGE_API_KEY", "")
+    VOYAGE_MODEL: str = os.getenv("VOYAGE_MODEL", "voyage-3")
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_EMBEDDING_MODEL: str = os.getenv(
+        "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"
+    )
+
     @classmethod
     def validate(cls) -> list[str]:
         """Return a list of configuration warnings/errors."""

@@ -41,7 +41,13 @@ const FRAMEWORK_COMPONENTS: {
     key: "keyword_component",
     label: "Keyword match score",
     blurb:
-      "Average per-chunk keyword strength under the active framework. Fed into chunk scores at 30% weight.",
+      "Average per-chunk keyword strength under the active framework. 25% of every chunk score.",
+  },
+  {
+    key: "concept_component",
+    label: "Semantic concept score",
+    blurb:
+      "Embedding-based concept matches that fire on paraphrase, not literal words. 20% of every chunk score.",
   },
   {
     key: "commitment_component",
@@ -76,9 +82,10 @@ export function ContributionList({
 
       <p className="text-xs text-zinc-500">
         The composite is a 4-component blend over relevant chunks. Each chunk
-        score itself is 55% LLM expansion + 30% keyword strength + 15%
-        commitment evidence — every contribution traces back to either an LLM
-        rationale or a literal regex match.
+        score itself is 40% LLM expansion + 25% keyword strength + 20%
+        semantic concept score + 15% commitment evidence — every contribution
+        traces back to either an LLM rationale, a literal regex match, or a
+        cosine-similarity match on a concept&apos;s reference vector.
       </p>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

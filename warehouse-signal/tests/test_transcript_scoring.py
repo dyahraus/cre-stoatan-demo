@@ -170,11 +170,12 @@ def test_tier_mapping_boundaries():
 
 
 def test_hybrid_chunk_score_weights():
-    """Document the exact 0.55 / 0.30 / 0.15 split."""
-    # No hits → score is purely the LLM term
-    score, kw, commit = compute_chunk_score(0.5, [])
-    assert score == round(0.55 * 0.5, 4)
-    assert kw == 0.0 and commit == 0.0
+    """Document the four-channel hybrid math: 0.40 LLM + 0.25 kw +
+    0.20 concept + 0.15 commitment."""
+    # No hits → score is purely the LLM term at 40%
+    score, kw, commit, concept = compute_chunk_score(0.5, [])
+    assert score == round(0.40 * 0.5, 4)
+    assert kw == 0.0 and commit == 0.0 and concept == 0.0
 
 
 def test_company_score_uses_latest_transcript(storage):

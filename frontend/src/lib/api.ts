@@ -2,6 +2,7 @@ import type {
   BoostConfig,
   CompanyHistoryEntry,
   CompanyScore,
+  ConceptMode,
   DemoChunkResult,
   DemoParseResult,
   DemoScoreResult,
@@ -9,8 +10,10 @@ import type {
   DryRunResult,
   EnumValues,
   GeographySummary,
+  KeywordCategory,
   ScanJob,
   ScanProgressEvent,
+  SignalConcept,
   SignalExtraction,
   SignalFramework,
   Stats,
@@ -283,6 +286,67 @@ export async function importKeywordsCSV(
 
 export function frameworkTemplateUrl(): string {
   return `${BASE}/frameworks/template.csv`;
+}
+
+// ---------------------------------------------------------------------------
+// Concepts (Phase 6D)
+// ---------------------------------------------------------------------------
+
+export async function addConcept(
+  frameworkId: string,
+  body: {
+    category: KeywordCategory;
+    label: string;
+    description?: string;
+    example_phrases?: string[];
+    weight?: number;
+    threshold?: number;
+    mode?: ConceptMode;
+  }
+): Promise<SignalConcept> {
+  const res = await fetch(`${BASE}/frameworks/${frameworkId}/concepts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
+export async function patchConcept(
+  frameworkId: string,
+  conceptId: string,
+  body: Partial<{
+    category: KeywordCategory;
+    label: string;
+    description: string;
+    example_phrases: string[];
+    weight: number;
+    threshold: number;
+    mode: ConceptMode;
+  }>
+): Promise<SignalConcept> {
+  const res = await fetch(
+    `${BASE}/frameworks/${frameworkId}/concepts/${conceptId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
+export async function deleteConcept(
+  frameworkId: string,
+  conceptId: string
+): Promise<void> {
+  const res = await fetch(
+    `${BASE}/frameworks/${frameworkId}/concepts/${conceptId}`,
+    { method: "DELETE" }
+  );
+  if (!res.ok && res.status !== 204) throw new Error(await readError(res));
 }
 
 export async function patchKeyword(

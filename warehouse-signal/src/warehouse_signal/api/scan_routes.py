@@ -22,6 +22,8 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from warehouse_signal.analysis.concept_engine import detect as detect_concepts
+from warehouse_signal.analysis.embeddings import NullEmbedder, get_embedder
 from warehouse_signal.analysis.extractor import ClaudeAnalyzer
 from warehouse_signal.analysis.keyword_engine import compile_framework, detect
 from warehouse_signal.api.deps import get_storage
@@ -336,6 +338,42 @@ async def _run_scan(
             for chunk in chunks:
                 hits = detect(chunk, framework, compiled=compiled)
                 storage.replace_keyword_hits_for_chunk(chunk.chunk_id, hits)
+
+            # Concepts: only when the framework defines them AND embedder configured
+            if framework.concepts:
+                embedder = get_embedder()
+                if not isinstance(embedder, NullEmbedder):
+                    _emit_event(
+                        storage,
+                        job,
+                        {"type": "progress", "ticker": ticker, "phase": "concept"},
+                    )
+                    for chunk in chunks:
+                        vec = storage.get_chunk_embedding(chunk.chunk_id)
+                        if not vec:
+                            try:
+                                vec = embedder.embed(chunk.text)
+                            except Exception as e:  # noqa: BLE001
+                                _emit_event(
+                                    storage,
+                                    job,
+                                    {
+                                        "type": "warn",
+                                        "ticker": ticker,
+                                        "message": f"embed error: {e}",
+                                    },
+                                )
+                                vec = []
+                            if vec:
+                                storage.save_chunk_embedding(chunk.chunk_id, vec)
+                        if not vec:
+                            continue
+                        c_hits = detect_concepts(
+                            chunk, framework.concepts, vec, embedder=embedder
+                        )
+                        storage.replace_concept_hits_for_chunk(
+                            chunk.chunk_id, framework.id, c_hits
+                        )
 
             _emit_event(
                 storage,

@@ -17,6 +17,12 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
+from warehouse_signal.analysis.concept_engine import (
+    concept_score,
+    detect as detect_concepts,
+    hits_summary_by_concept,
+)
+from warehouse_signal.analysis.embeddings import NullEmbedder, get_embedder
 from warehouse_signal.analysis.keyword_engine import (
     commitment_evidence_bonus,
     detect,
@@ -26,7 +32,9 @@ from warehouse_signal.analysis.keyword_engine import (
 from warehouse_signal.api.deps import get_storage
 from warehouse_signal.models.schemas import (
     BoostConfig,
+    ConceptMode,
     KeywordCategory,
+    SignalConcept,
     SignalFramework,
     SignalKeyword,
     TranscriptChunk,
@@ -265,6 +273,88 @@ def delete_keyword(framework_id: str, keyword_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Concepts (semantic detectors, Phase 6D)
+# ---------------------------------------------------------------------------
+
+class ConceptCreate(BaseModel):
+    category: KeywordCategory
+    label: str
+    description: str = ""
+    example_phrases: list[str] = []
+    weight: float = Field(ge=1.0, le=10.0, default=5.0)
+    threshold: float = Field(ge=0.5, le=0.9, default=0.65)
+    mode: ConceptMode = ConceptMode.EMBEDDING
+
+
+class ConceptUpdate(BaseModel):
+    category: KeywordCategory | None = None
+    label: str | None = None
+    description: str | None = None
+    example_phrases: list[str] | None = None
+    weight: float | None = Field(default=None, ge=1.0, le=10.0)
+    threshold: float | None = Field(default=None, ge=0.5, le=0.9)
+    mode: ConceptMode | None = None
+
+
+@router.post("/{framework_id}/concepts", status_code=201)
+def add_concept(framework_id: str, req: ConceptCreate) -> dict:
+    storage = get_storage()
+    if not storage.get_framework(framework_id):
+        raise HTTPException(404, f"Framework {framework_id} not found")
+    concept = SignalConcept(
+        id=str(uuid.uuid4()),
+        framework_id=framework_id,
+        category=req.category,
+        label=req.label,
+        description=req.description,
+        example_phrases=req.example_phrases,
+        weight=req.weight,
+        threshold=req.threshold,
+        mode=req.mode,
+        created_at=datetime.now(timezone.utc),
+    )
+    storage.add_concept(concept)
+    return concept.model_dump(mode="json")
+
+
+@router.patch("/{framework_id}/concepts/{concept_id}")
+def update_concept(
+    framework_id: str, concept_id: str, req: ConceptUpdate
+) -> dict:
+    storage = get_storage()
+    fw = storage.get_framework(framework_id)
+    if not fw:
+        raise HTTPException(404, f"Framework {framework_id} not found")
+    target = next((c for c in fw.concepts if c.id == concept_id), None)
+    if not target:
+        raise HTTPException(404, f"Concept {concept_id} not in framework")
+    if req.category is not None:
+        target.category = req.category
+    if req.label is not None:
+        target.label = req.label
+    if req.description is not None:
+        target.description = req.description
+    if req.example_phrases is not None:
+        target.example_phrases = req.example_phrases
+    if req.weight is not None:
+        target.weight = req.weight
+    if req.threshold is not None:
+        target.threshold = req.threshold
+    if req.mode is not None:
+        target.mode = req.mode
+    storage.update_concept(target)
+    return target.model_dump(mode="json")
+
+
+@router.delete("/{framework_id}/concepts/{concept_id}", status_code=204)
+def delete_concept(framework_id: str, concept_id: str) -> None:
+    storage = get_storage()
+    if not storage.get_framework(framework_id):
+        raise HTTPException(404, f"Framework {framework_id} not found")
+    storage.delete_concept(concept_id)
+
+
+# ---------------------------------------------------------------------------
 # Bulk import (CSV / JSON)
 # ---------------------------------------------------------------------------
 
@@ -480,17 +570,44 @@ def dry_run(framework_id: str, req: DryRunRequest) -> dict:
         token_estimate=len(req.text.split()),
     )
     hits = detect(chunk, fw)
-    kw_score = keyword_score(hits)
+    kw_score_val = keyword_score(hits)
     commit_score = commitment_evidence_bonus(hits)
-    hybrid, _, _ = compute_chunk_score(req.llm_expansion_score, hits)
+
+    concept_hits = []
+    concept_score_val = 0.0
+    embedder_status = "none"
+    if fw.concepts:
+        embedder = get_embedder()
+        if not isinstance(embedder, NullEmbedder):
+            embedder_status = embedder.name
+            try:
+                chunk_vec = embedder.embed(req.text)
+            except Exception:  # noqa: BLE001
+                chunk_vec = []
+            if chunk_vec:
+                concept_hits = detect_concepts(
+                    chunk, fw.concepts, chunk_vec, embedder=embedder
+                )
+                concept_score_val = concept_score(concept_hits)
+        else:
+            embedder_status = "missing-key"
+
+    hybrid, _, _, _ = compute_chunk_score(
+        req.llm_expansion_score, hits, concept_hits
+    )
 
     return {
         "framework_id": framework_id,
         "hits": [h.model_dump(mode="json") for h in hits],
-        "keyword_score": kw_score,
+        "concept_hits": [c.model_dump(mode="json") for c in concept_hits],
+        "keyword_score": kw_score_val,
+        "concept_score": concept_score_val,
         "commitment_score": commit_score,
         "hybrid_chunk_score": hybrid,
         "llm_expansion_score": req.llm_expansion_score,
         "summary": hits_summary_by_category(hits),
+        "concept_summary": hits_summary_by_concept(concept_hits),
         "total_hits": len(hits),
+        "total_concept_hits": len(concept_hits),
+        "embedder": embedder_status,
     }

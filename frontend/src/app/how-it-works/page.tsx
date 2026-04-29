@@ -97,15 +97,16 @@ export default function HowItWorksPage() {
         <Subsection title="1. Hybrid chunk score">
           <pre className="rounded bg-zinc-900 border border-zinc-800 px-3 py-2 text-xs font-mono text-zinc-200 overflow-x-auto">
 {`chunk_score
-  = 0.55 × LLM expansion strength
-  + 0.30 × keyword match strength
+  = 0.40 × LLM expansion strength
+  + 0.25 × keyword match strength
+  + 0.20 × semantic concept score
   + 0.15 × commitment evidence`}
           </pre>
           <p className="text-xs text-zinc-500">
             Every contribution is auditable: the LLM provides reasoning + an
-            evidence quote, and the keyword engine logs the literal phrase it
-            matched (and the $/sqft/date that satisfied the commitment
-            companion regex).
+            evidence quote, the keyword engine logs the literal phrase it
+            matched, and the concept engine logs the cosine similarity
+            against each concept&apos;s reference vector.
           </p>
         </Subsection>
 
@@ -148,6 +149,17 @@ export default function HowItWorksPage() {
           &ldquo;letter of intent&rdquo;) are gated on a numeric or date
           companion within ~20 tokens — so &ldquo;we may&rdquo; alone never
           fires unless it&apos;s anchored to a real commitment.
+        </p>
+        <p className="text-sm text-zinc-300">
+          <strong>Semantic concepts</strong> live alongside keywords in the
+          same framework. A concept like &ldquo;warehouse capacity
+          constraints&rdquo; matches by cosine similarity to a reference
+          vector built from its description plus a few example phrases — so a
+          chunk saying &ldquo;we don&apos;t have the storage capacity to keep
+          up with demand&rdquo; can fire even when no literal keyword
+          matches. Each concept has a weight and a similarity threshold;
+          partial-credit hits scale by how far above the threshold the
+          similarity sits. Embeddings come from Voyage AI by default.
         </p>
       </Section>
 
