@@ -12,6 +12,8 @@ def init_storage() -> None:
 
 def close_storage() -> None:
     global _storage
+    if _storage is not None:
+        _storage.close()
     _storage = None
 
 

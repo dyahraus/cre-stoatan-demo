@@ -209,8 +209,49 @@ export async function createFramework(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`API error ${res.status}`);
+  if (!res.ok) throw new Error(await readError(res));
   return res.json();
+}
+
+export async function patchFramework(
+  id: string,
+  body: Partial<{ name: string; description: string; is_default: boolean }>
+): Promise<SignalFramework> {
+  const res = await fetch(`${BASE}/frameworks/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
+export async function deleteFramework(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/frameworks/${id}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 204) throw new Error(await readError(res));
+}
+
+export async function duplicateFramework(
+  sourceId: string,
+  body: { name: string; description?: string; is_default?: boolean }
+): Promise<SignalFramework> {
+  const res = await fetch(`${BASE}/frameworks/${sourceId}/duplicate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
+async function readError(res: Response): Promise<string> {
+  try {
+    const data = await res.json();
+    if (typeof data?.detail === "string") return `API ${res.status}: ${data.detail}`;
+  } catch {
+    // fall through
+  }
+  return `API error ${res.status}`;
 }
 
 export async function patchKeyword(

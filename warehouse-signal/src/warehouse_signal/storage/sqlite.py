@@ -42,12 +42,30 @@ class Storage:
     """SQLite-backed storage for transcripts, companies, and chunks."""
 
     def __init__(self, db_path: Path | str | None = None):
-        path = Path(db_path or Config.DATABASE_PATH)
+        # Re-read env at construction time so test fixtures that monkeypatch
+        # DATABASE_PATH after import are honored. Falls back to the Config
+        # default when nothing's been set.
+        import os
+        if db_path is None:
+            env_path = os.getenv("DATABASE_PATH")
+            db_path = env_path if env_path else Config.DATABASE_PATH
+        path = Path(db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         import sqlite3
-        conn = sqlite3.connect(str(path), check_same_thread=False)
-        self.db = sqlite_utils.Database(conn)
+        self._conn = sqlite3.connect(str(path), check_same_thread=False)
+        self.db = sqlite_utils.Database(self._conn)
         self._ensure_tables()
+
+    def close(self) -> None:
+        """Release the underlying SQLite connection.
+
+        Called by tests + lifespan teardown so files unlock immediately
+        instead of waiting on Python GC.
+        """
+        try:
+            self._conn.close()
+        except Exception:
+            pass
 
     def _ensure_tables(self) -> None:
         """Create tables if they don't exist."""

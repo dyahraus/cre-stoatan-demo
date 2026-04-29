@@ -3,9 +3,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   addKeyword,
+  createFramework,
+  deleteFramework,
   deleteKeyword,
   dryRunFramework,
+  duplicateFramework,
   fetchFrameworks,
+  patchFramework,
   patchKeyword,
 } from "@/lib/api";
 import type {
@@ -145,10 +149,30 @@ export default function FrameworkPage() {
   }
 
   if (!framework || !groups) {
+    const is404 = err?.includes("404");
     return (
-      <p className="text-sm text-zinc-500 py-8 text-center">
-        No framework found.
-      </p>
+      <div className="space-y-4 max-w-2xl">
+        <h2 className="text-xl md:text-2xl font-bold text-white">
+          Signal Framework
+        </h2>
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-300 space-y-2">
+          <p className="font-medium">Couldn&apos;t load any frameworks.</p>
+          {err && <p className="text-xs font-mono text-amber-200/80">{err}</p>}
+          {is404 && (
+            <p className="text-xs">
+              The backend doesn&apos;t expose <code>/api/frameworks</code> yet.
+              On production this means Railway needs to redeploy off the latest
+              commit. In dev, restart the FastAPI backend.
+            </p>
+          )}
+          <button
+            onClick={reload}
+            className="mt-1 rounded bg-amber-500/20 hover:bg-amber-500/30 px-3 py-1 text-xs"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
     );
   }
 
@@ -164,31 +188,17 @@ export default function FrameworkPage() {
         </p>
       </div>
 
-      {/* Framework selector */}
-      <div className="flex items-center gap-3">
-        <span className="text-xs uppercase tracking-wider text-zinc-500">
-          Active framework
-        </span>
-        <select
-          value={framework.id}
-          onChange={(e) => {
-            const next = allFrameworks.find((f) => f.id === e.target.value);
-            if (next) setFramework(next);
-          }}
-          className="rounded bg-zinc-900 border border-zinc-800 px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
-        >
-          {allFrameworks.map((f) => (
-            <option key={f.id} value={f.id}>
-              {f.name}
-              {f.is_default ? " (default)" : ""}
-            </option>
-          ))}
-        </select>
-        <span className="text-xs text-zinc-500">
-          {framework.keywords.length} keywords ·{" "}
-          {framework.is_default ? "default" : "alternate"}
-        </span>
-      </div>
+      {/* Framework header bar */}
+      <FrameworkHeader
+        framework={framework}
+        allFrameworks={allFrameworks}
+        onSwitch={(id) => {
+          const next = allFrameworks.find((f) => f.id === id);
+          if (next) setFramework(next);
+        }}
+        onMutated={reload}
+        onError={(m) => setErr(m)}
+      />
 
       {err && (
         <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">
@@ -409,6 +419,263 @@ function Stat({ label, value }: { label: string; value: string }) {
         {label}
       </div>
       <div className="text-sm font-mono text-white mt-0.5">{value}</div>
+    </div>
+  );
+}
+
+function FrameworkHeader({
+  framework,
+  allFrameworks,
+  onSwitch,
+  onMutated,
+  onError,
+}: {
+  framework: SignalFramework;
+  allFrameworks: SignalFramework[];
+  onSwitch: (id: string) => void;
+  onMutated: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(framework.name);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [copyKeywords, setCopyKeywords] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const isOnly = allFrameworks.length === 1;
+
+  // Sync rename buffer when active framework changes
+  useEffect(() => {
+    setName(framework.name);
+    setRenaming(false);
+  }, [framework.id, framework.name]);
+
+  async function commitRename() {
+    if (!name.trim() || name === framework.name) {
+      setRenaming(false);
+      setName(framework.name);
+      return;
+    }
+    setBusy(true);
+    try {
+      await patchFramework(framework.id, { name: name.trim() });
+      onMutated();
+      setRenaming(false);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setAsDefault() {
+    if (framework.is_default) return;
+    setBusy(true);
+    try {
+      await patchFramework(framework.id, { is_default: true });
+      onMutated();
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDuplicate() {
+    const name = prompt(
+      "Name for the duplicated framework:",
+      `${framework.name} (copy)`
+    );
+    if (!name?.trim()) return;
+    setBusy(true);
+    try {
+      const cloned = await duplicateFramework(framework.id, {
+        name: name.trim(),
+      });
+      onMutated();
+      onSwitch(cloned.id);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDelete() {
+    if (isOnly) return;
+    if (!confirm(`Delete framework "${framework.name}"? This can't be undone.`)) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await deleteFramework(framework.id);
+      const remaining = allFrameworks.filter((f) => f.id !== framework.id);
+      const next = remaining.find((f) => f.is_default) ?? remaining[0];
+      if (next) onSwitch(next.id);
+      onMutated();
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onCreate() {
+    if (!newName.trim()) return;
+    setBusy(true);
+    try {
+      const fw = copyKeywords
+        ? await duplicateFramework(framework.id, { name: newName.trim() })
+        : await createFramework({ name: newName.trim() });
+      onMutated();
+      onSwitch(fw.id);
+      setCreating(false);
+      setNewName("");
+      setCopyKeywords(false);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3 space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={framework.id}
+          onChange={(e) => onSwitch(e.target.value)}
+          disabled={busy}
+          className="rounded bg-zinc-900 border border-zinc-800 px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
+        >
+          {allFrameworks.map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.name}
+              {f.is_default ? " · default" : ""}
+            </option>
+          ))}
+        </select>
+
+        {renaming ? (
+          <div className="flex items-center gap-1">
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitRename();
+                if (e.key === "Escape") {
+                  setRenaming(false);
+                  setName(framework.name);
+                }
+              }}
+              className="rounded bg-zinc-900 border border-blue-500 px-2 py-1.5 text-sm text-white focus:outline-none"
+            />
+          </div>
+        ) : (
+          <button
+            onClick={() => setRenaming(true)}
+            disabled={busy}
+            className="text-xs text-zinc-400 hover:text-zinc-200 px-2 py-1 rounded hover:bg-zinc-800 transition disabled:opacity-50"
+            title="Rename framework"
+          >
+            ✎ rename
+          </button>
+        )}
+
+        <button
+          onClick={() => setCreating((v) => !v)}
+          disabled={busy}
+          className="rounded bg-blue-600 hover:bg-blue-500 text-white text-xs px-2.5 py-1.5 disabled:opacity-50"
+        >
+          + New framework
+        </button>
+        <button
+          onClick={onDuplicate}
+          disabled={busy}
+          className="rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs px-2.5 py-1.5 disabled:opacity-50"
+        >
+          Duplicate
+        </button>
+        {!framework.is_default && (
+          <button
+            onClick={setAsDefault}
+            disabled={busy}
+            className="rounded border border-zinc-700 hover:border-emerald-500/50 text-zinc-300 hover:text-emerald-300 text-xs px-2.5 py-1.5 disabled:opacity-50"
+          >
+            Set as default
+          </button>
+        )}
+        <button
+          onClick={onDelete}
+          disabled={busy || isOnly}
+          title={
+            isOnly
+              ? "Can't delete the only framework"
+              : "Delete this framework"
+          }
+          className="rounded border border-red-500/30 text-red-400 hover:bg-red-500/10 text-xs px-2.5 py-1.5 disabled:opacity-30 disabled:cursor-not-allowed ml-auto"
+        >
+          Delete
+        </button>
+      </div>
+
+      <div className="text-xs text-zinc-500">
+        {framework.keywords.length} keywords ·{" "}
+        {framework.is_default ? "default framework" : "alternate framework"} ·
+        updated {new Date(framework.updated_at).toLocaleDateString()}
+        {framework.description && (
+          <span className="ml-2 italic">— {framework.description}</span>
+        )}
+      </div>
+
+      {creating && (
+        <div className="rounded border border-blue-500/30 bg-blue-500/5 p-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <input
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Framework name (e.g. 'REIT-tuned v1')"
+              className="flex-1 rounded bg-zinc-900 border border-zinc-800 px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onCreate();
+              }}
+            />
+            <label className="flex items-center gap-1.5 text-xs text-zinc-400 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={copyKeywords}
+                onChange={(e) => setCopyKeywords(e.target.checked)}
+              />
+              Copy current keywords
+            </label>
+            <button
+              onClick={onCreate}
+              disabled={busy || !newName.trim()}
+              className="rounded bg-blue-600 hover:bg-blue-500 text-white text-xs px-3 py-1.5 disabled:opacity-50"
+            >
+              Create
+            </button>
+            <button
+              onClick={() => {
+                setCreating(false);
+                setNewName("");
+                setCopyKeywords(false);
+              }}
+              className="text-xs text-zinc-500 hover:text-zinc-300 px-2"
+            >
+              Cancel
+            </button>
+          </div>
+          <p className="text-[11px] text-zinc-500">
+            {copyKeywords
+              ? "Will clone every keyword + weight from the current framework."
+              : "Will start blank. Add keywords manually or import a CSV."}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

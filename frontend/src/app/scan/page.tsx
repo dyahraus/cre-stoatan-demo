@@ -6,6 +6,7 @@ import {
   createWatchlist,
   deleteWatchlist,
   fetchEnums,
+  fetchFrameworks,
   fetchWatchlists,
   startScan,
   streamScanProgress,
@@ -14,6 +15,7 @@ import type {
   EnumValues,
   ScanJob,
   ScanProgressEvent,
+  SignalFramework,
   SignalTier,
   Watchlist,
 } from "@/lib/types";
@@ -40,6 +42,8 @@ export default function ScanPage() {
   const [tickerText, setTickerText] = useState("PLD\nWMT\nHD");
   const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
   const [watchlistId, setWatchlistId] = useState<string>("");
+  const [frameworks, setFrameworks] = useState<SignalFramework[]>([]);
+  const [frameworkId, setFrameworkId] = useState<string>("");
 
   // Run state
   const [running, setRunning] = useState(false);
@@ -56,6 +60,13 @@ export default function ScanPage() {
       .catch(() => {});
     fetchWatchlists()
       .then(setWatchlists)
+      .catch(() => {});
+    fetchFrameworks()
+      .then((fws) => {
+        setFrameworks(fws);
+        const def = fws.find((f) => f.is_default) ?? fws[0];
+        if (def) setFrameworkId(def.id);
+      })
       .catch(() => {});
     return () => abortRef.current?.abort();
   }, []);
@@ -101,6 +112,7 @@ export default function ScanPage() {
       }
       payload = { mode: "watchlist", watchlist_id: watchlistId, year, quarter };
     }
+    if (frameworkId) payload.framework_id = frameworkId;
 
     setRunning(true);
     try {
@@ -202,7 +214,7 @@ export default function ScanPage() {
       </div>
 
       {/* Form */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <Field label="Year">
           <input
             type="number"
@@ -220,6 +232,22 @@ export default function ScanPage() {
             {[1, 2, 3, 4].map((q) => (
               <option key={q} value={q}>
                 Q{q}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Framework">
+          <select
+            value={frameworkId}
+            onChange={(e) => setFrameworkId(e.target.value)}
+            disabled={frameworks.length === 0}
+            className="w-full rounded bg-zinc-900 border border-zinc-800 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
+          >
+            {frameworks.length === 0 && <option value="">— loading —</option>}
+            {frameworks.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name}
+                {f.is_default ? " · default" : ""} · {f.keywords.length} kw
               </option>
             ))}
           </select>

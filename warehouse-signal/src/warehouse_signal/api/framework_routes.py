@@ -131,6 +131,14 @@ def delete_framework(framework_id: str) -> None:
     storage = get_storage()
     if not storage.get_framework(framework_id):
         raise HTTPException(404, f"Framework {framework_id} not found")
+    if storage.db["signal_frameworks"].count <= 1:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot delete the only framework. Create another framework "
+                "first, then delete this one."
+            ),
+        )
     storage.delete_framework(framework_id)
 
 
